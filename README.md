@@ -57,6 +57,11 @@ decifrabili** e dovrai inserirle di nuovo — quindi conservala.
     rollback ed eliminazione.
 - **Task bar in fondo**: mostra le migrazioni in corso con percentuale di
   completamento (derivata parsando il log del task PVE).
+- **Creazione VM e CT con form dinamici**: selezionando un nodo fisico
+  compaiono i pulsanti **"+ Nuova VM"** e **"+ Nuovo Container"**. Il form si
+  popola con le risorse reali del nodo (prossimo VMID libero, storage
+  filtrati per content type, bridge di rete, ISO disponibili, template LXC)
+  interrogando `GET /api/clusters/{cid}/nodes/{node}/resources`.
 
 ---
 
@@ -102,6 +107,9 @@ un endpoint di change-password.
 | `POST` | `/api/credentials` | aggiunge un cluster (password cifrata) |
 | `GET`  | `/api/clusters/{cid}/tree` | payload completo dell'albero |
 | `GET`  | `/api/clusters/{cid}/nodes/{node}/rrd` | storico RRD |
+| `GET`  | `/api/clusters/{cid}/nodes/{node}/resources` | risorse del nodo per le form di creazione |
+| `POST` | `/api/clusters/{cid}/nodes/{node}/qemu` | crea VM |
+| `POST` | `/api/clusters/{cid}/nodes/{node}/lxc` | crea CT |
 | `GET`  | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}` | stato + config |
 | `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/{start,stop,shutdown,reboot}` | azioni |
 | `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/clone` | clonazione |

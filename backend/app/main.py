@@ -14,7 +14,7 @@ from .config import settings, ensure_fernet_key
 from .database import Base, engine
 from .websocket import stream_stats
 from .routers import (
-    auth_router, credentials, cluster, vms, snapbackup, tasks_router,
+    auth_router, credentials, cluster, vms, snapbackup, tasks_router, create,
 )
 
 
@@ -56,6 +56,7 @@ app.include_router(cluster.router)
 app.include_router(vms.router)
 app.include_router(snapbackup.router)
 app.include_router(tasks_router.router)
+app.include_router(create.router)
 
 
 # ---------- WebSocket for live stats ----------

@@ -162,3 +162,70 @@ def task_status(px, node: str, upid: str) -> dict:
 
 def task_log(px, node: str, upid: str, start: int = 0, limit: int = 50) -> list[dict]:
     return px.nodes(node).tasks(upid).log.get(start=start, limit=limit)
+
+
+# ---------- Resource discovery (for create forms) ----------
+
+def next_vmid(px) -> int:
+    """First free VMID across the whole cluster."""
+    return int(px.cluster.nextid.get())
+
+
+def node_storages(px, node: str, content: Optional[str] = None) -> list[dict]:
+    """
+    Storages enabled on a node. `content` filters by the kind of data the
+    storage can hold: 'images' (VM disks), 'rootdir' (CT volumes),
+    'iso', 'vztmpl', 'backup', 'snippets'.
+    """
+    params = {}
+    if content:
+        params["content"] = content
+    return px.nodes(node).storage.get(**params)
+
+
+def node_iso_list(px, node: str) -> list[dict]:
+    """Every ISO image available on any storage of the node."""
+    out: list[dict] = []
+    for st in node_storages(px, node, content="iso"):
+        name = st["storage"]
+        try:
+            items = px.nodes(node).storage(name).content.get(content="iso") or []
+            for it in items:
+                it["storage"] = name
+                out.append(it)
+        except Exception:
+            continue
+    return out
+
+
+def node_ct_templates(px, node: str) -> list[dict]:
+    """CT templates (vztmpl) across the node's storages."""
+    out: list[dict] = []
+    for st in node_storages(px, node, content="vztmpl"):
+        name = st["storage"]
+        try:
+            items = px.nodes(node).storage(name).content.get(content="vztmpl") or []
+            for it in items:
+                it["storage"] = name
+                out.append(it)
+        except Exception:
+            continue
+    return out
+
+
+def node_networks(px, node: str) -> list[dict]:
+    """Return bridges (type=bridge) configured on the node."""
+    nets = px.nodes(node).network.get() or []
+    return [n for n in nets if n.get("type") == "bridge"]
+
+
+# ---------- Create VM / CT ----------
+
+def create_qemu(px, node: str, params: dict) -> str:
+    """POST /nodes/{node}/qemu. Returns UPID of the task."""
+    return px.nodes(node).qemu.post(**params)
+
+
+def create_lxc(px, node: str, params: dict) -> str:
+    """POST /nodes/{node}/lxc. Returns UPID of the task."""
+    return px.nodes(node).lxc.post(**params)

@@ -4,6 +4,7 @@
 import { api } from './api.js';
 import { mountCharts, subscribe, unsubscribe } from './charts.js';
 import { confirmByName } from './modal.js';
+import { openCreateVM, openCreateCT } from './create.js';
 
 let current = null;        // {type, node, vmid, ...}
 let credId  = null;
@@ -41,6 +42,12 @@ function renderNode(host, cid, n) {
         <div>Uptime: ${fmtUptime(n.uptime)}</div>
         <div>PVE: ${n.pve_version||'?'}</div>
       </div>
+
+      <div class="flex flex-wrap gap-2">
+        <button id="newVmBtn" class="bg-emerald-700 hover:bg-emerald-600 px-2 py-1 rounded text-xs">🧊 + Nuova VM</button>
+        <button id="newCtBtn" class="bg-sky-700 hover:bg-sky-600 px-2 py-1 rounded text-xs">📦 + Nuovo Container</button>
+      </div>
+
       <div class="chart-box"><div class="text-xs text-slate-400 mb-1">CPU (30m)</div>
         <div class="h-32"><canvas id="cpuChart"></canvas></div></div>
       <div class="chart-box"><div class="text-xs text-slate-400 mb-1">Memoria (30m)</div>
@@ -48,6 +55,9 @@ function renderNode(host, cid, n) {
     </div>`;
   mountCharts(host.querySelector('#cpuChart'), host.querySelector('#memChart'));
   subscribe(cid, `node/${n.node}`);
+
+  host.querySelector('#newVmBtn').addEventListener('click', () => openCreateVM(cid, n.node));
+  host.querySelector('#newCtBtn').addEventListener('click', () => openCreateCT(cid, n.node));
 }
 
 // ---------- Guest (VM / CT) panel ----------

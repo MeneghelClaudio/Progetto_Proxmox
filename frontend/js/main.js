@@ -55,6 +55,11 @@ document.addEventListener('pmx:migrate-request', async (e) => {
   await triggerMigration(currentCredId, src, targetNode);
 });
 
+// --- Refresh tree after a create / destructive action ---
+document.addEventListener('pmx:tree-refresh', () => {
+  if (currentCredId) onCredChanged();
+});
+
 // --- Add credential modal ---
 document.getElementById('addCredBtn').addEventListener('click', () => {
   const m = openModal(`
