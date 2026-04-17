@@ -1,0 +1,48 @@
+/* Custom styles on top of Tailwind CDN */
+
+.tree-node {
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tree-node:hover     { background: rgba(148,163,184,.12); }
+.tree-node.selected  { background: rgba(14,165,233,.25); color: #bae6fd; }
+.tree-node.dragover  { outline: 2px dashed #38bdf8; }
+
+.tree-children { margin-left: 14px; border-left: 1px solid rgba(51,65,85,.5); padding-left: 6px; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.running { background: #22c55e; }
+.dot.stopped { background: #64748b; }
+.dot.paused  { background: #f59e0b; }
+.dot.offline { background: #ef4444; }
+
+.tab-btn.active { border-color: #0ea5e9; color: #7dd3fc; }
+
+.progress {
+  background: #1e293b;
+  border-radius: 999px;
+  height: 6px;
+  overflow: hidden;
+  position: relative;
+}
+.progress > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+  transition: width .3s ease;
+}
+
+.chart-box {
+  background: #0b1220;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 8px;
+}

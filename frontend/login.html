@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Proxmox Manager · Login</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center">
+  <div class="w-full max-w-sm bg-slate-800 rounded-xl shadow-xl p-8 border border-slate-700">
+    <div class="text-center mb-6">
+      <div class="text-4xl">🧊</div>
+      <h1 class="text-xl font-semibold mt-2">Proxmox Manager</h1>
+      <p class="text-slate-400 text-sm mt-1">Accedi per gestire i tuoi cluster</p>
+    </div>
+
+    <form id="loginForm" class="space-y-3" autocomplete="on">
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Utente</label>
+        <input name="username" required autocomplete="username"
+               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2
+                      focus:outline-none focus:ring-2 focus:ring-sky-500" />
+      </div>
+      <div>
+        <label class="block text-xs text-slate-400 mb-1">Password</label>
+        <input name="password" type="password" required autocomplete="current-password"
+               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2
+                      focus:outline-none focus:ring-2 focus:ring-sky-500" />
+      </div>
+      <button class="w-full bg-sky-600 hover:bg-sky-500 rounded-lg py-2 font-medium transition">
+        Accedi
+      </button>
+      <p id="loginError" class="text-red-400 text-sm text-center hidden"></p>
+    </form>
+
+    <p class="text-xs text-slate-500 text-center mt-6">
+      Primo avvio → admin / admin (cambia subito la password)
+    </p>
+  </div>
+
+<script type="module">
+import { api, saveToken } from '/js/api.js';
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const body = new URLSearchParams({ username: f.get('username'), password: f.get('password') });
+  const err = document.getElementById('loginError');
+  err.classList.add('hidden');
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || 'Errore');
+    const data = await r.json();
+    saveToken(data.access_token, data.username);
+    location.href = '/index.html';
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.classList.remove('hidden');
+  }
+});
+</script>
+</body>
+</html>

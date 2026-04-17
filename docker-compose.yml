@@ -1,0 +1,62 @@
+services:
+  db:
+    image: mariadb:11
+    container_name: pmx_db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
+      MARIADB_DATABASE: ${DB_NAME:-proxmox_manager}
+      MARIADB_USER: ${DB_USER:-pmxuser}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-pmxpass}
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - pmx_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    container_name: pmx_backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${DB_NAME:-proxmox_manager}
+      DB_USER: ${DB_USER:-pmxuser}
+      DB_PASSWORD: ${DB_PASSWORD:-pmxpass}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-please}
+      FERNET_KEY: ${FERNET_KEY:-}   # if empty, generated at startup and persisted in /data/fernet.key
+      CORS_ORIGINS: "*"
+    volumes:
+      - backend_data:/data
+    networks:
+      - pmx_net
+    expose:
+      - "8000"
+
+  frontend:
+    build: ./frontend
+    container_name: pmx_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8027:80"
+    networks:
+      - pmx_net
+
+networks:
+  pmx_net:
+    driver: bridge
+
+volumes:
+  db_data:
+  backend_data:
