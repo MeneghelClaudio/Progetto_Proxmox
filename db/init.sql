@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS migration_tasks (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Bootstrap admin user (username: admin / password: admin) - CHANGE ON FIRST LOGIN
--- Hash below is bcrypt for "admin"
+-- Hash below is bcrypt($2b$12$...) of "admin", verified at generation time.
 INSERT INTO users (username, password_hash, is_admin)
-VALUES ('admin', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', 1)
+VALUES ('admin', '$2b$12$m2Y35Dzo4f.5385geIPrfuUifbXwOkcatiMyaI9WvANlGmeji3a1S', 1)
 ON DUPLICATE KEY UPDATE username=username;

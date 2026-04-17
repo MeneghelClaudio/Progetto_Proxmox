@@ -7,7 +7,6 @@ bcrypt-hashed and never stored in clear or reversibly.
 """
 
 from cryptography.fernet import Fernet
-from passlib.context import CryptContext
 
 from .config import ensure_fernet_key
 
@@ -31,16 +30,21 @@ def decrypt_password(token: bytes) -> str:
 
 
 # ---------- bcrypt for user login ----------
+# NOTE: we use the `bcrypt` library directly instead of passlib because
+# passlib 1.7.x is incompatible with bcrypt >= 4.1 (AttributeError on
+# `bcrypt.__about__`). This keeps the dependency surface small and robust.
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt as _bcrypt
 
 
 def hash_password(password: str) -> str:
-    return pwd_ctx.hash(password)
+    # bcrypt has a 72-byte input limit; truncate defensively.
+    raw = password.encode("utf-8")[:72]
+    return _bcrypt.hashpw(raw, _bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(password: str, hashed: str) -> bool:
     try:
-        return pwd_ctx.verify(password, hashed)
+        return _bcrypt.checkpw(password.encode("utf-8")[:72], hashed.encode("utf-8"))
     except Exception:
         return False
