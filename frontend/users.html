@@ -3,12 +3,9 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>Utenti & Permessi — ProxMox Manager</title>
+<title>Utenti &amp; Permessi — ProxMox Manager</title>
 <link rel="stylesheet" href="shared.css"/>
 <style>
-.users-layout { display:grid; grid-template-columns:1fr 340px; gap:16px; align-items:start; }
-
-/* User card */
 .user-card {
   background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius-lg); padding:18px;
@@ -22,12 +19,11 @@
   font-size:14px; font-weight:800; flex-shrink:0;
 }
 .user-card-info { flex:1; min-width:0; }
-.user-card-name { font-size:14px; font-weight:700; }
+.user-card-name { font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px; }
 .user-card-email { font-size:12px; color:var(--text-muted); font-family:var(--mono); }
 .user-card-meta  { font-size:11px; color:var(--text-dim); margin-top:2px; }
 .user-card-actions { display:flex; gap:6px; }
 
-/* Permission matrix */
 .perm-matrix {
   background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius-lg); overflow:hidden;
@@ -56,7 +52,6 @@
 .perm-cols { display:flex; gap:12px; align-items:center; }
 .perm-col-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; width:70px; text-align:center; }
 
-/* Role legend */
 .role-legend { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
 .role-item {
   display:flex; align-items:center; gap:6px;
@@ -64,6 +59,7 @@
   background:var(--surface); border:1px solid var(--border);
   font-size:12.5px;
 }
+.user-opacity-50 { opacity:.5; }
 </style>
 </head>
 <body>
@@ -80,7 +76,7 @@
     </div>
 
     <div class="tabs">
-      <div class="tab active" data-tab="users"  onclick="switchTab('users')">
+      <div class="tab active" data-tab="users" onclick="switchTab('users')">
         <span class="material-symbols-rounded">group</span> Utenti
       </div>
       <div class="tab" data-tab="matrix" onclick="switchTab('matrix')">
@@ -93,10 +89,10 @@
 
     <div id="tab-content"></div>
 
-    <!-- Modal add user -->
+    <!-- Modal: add user -->
     <div class="modal-overlay hidden" id="modal-add-user">
       <div class="modal">
-        <div class="modal-title">Aggiungi utente</div>
+        <div class="modal-title" id="modal-user-title">Aggiungi utente</div>
         <div class="form-group">
           <label class="form-label">Nome completo</label>
           <input type="text" class="form-input" id="new-name" placeholder="Mario Rossi"/>
@@ -110,21 +106,21 @@
           <input type="email" class="form-input" id="new-email" placeholder="mario@azienda.it"/>
         </div>
         <div class="form-group">
-          <label class="form-label">Password</label>
+          <label class="form-label" id="new-password-label">Password</label>
           <input type="password" class="form-input" id="new-password" placeholder="••••••••"/>
         </div>
         <div class="form-group">
           <label class="form-label">Ruolo</label>
           <select class="form-input" id="new-role">
-            <option value="admin">Admin Local</option>
-            <option value="senior">Admin Senior</option>
-            <option value="junior">Admin Junior</option>
+            <option value="admin">Admin Local — accesso completo</option>
+            <option value="senior">Admin Senior — gestione operativa</option>
+            <option value="junior" selected>Admin Junior — sola lettura</option>
           </select>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-add-user')">Annulla</button>
-          <button class="btn btn-primary" onclick="addUser()">
-            <span class="material-symbols-rounded">person_add</span> Aggiungi
+          <button class="btn btn-primary" id="save-user-btn" onclick="saveUser()">
+            <span class="material-symbols-rounded">person_add</span> <span id="save-user-label">Aggiungi</span>
           </button>
         </div>
       </div>
@@ -132,114 +128,151 @@
   </main>
 </div>
 
+<script src="api.js"></script>
 <script src="shared.js"></script>
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-if (!can(session,'manage_cluster')) { showToast('Accesso negato — solo Admin Local','danger'); setTimeout(()=>location.href='dashboard.html',1500); }
-loadTreeData().then(() => buildSidebar('users'));
-
-if (session.level==='admin') {
-  document.getElementById('admin-actions').innerHTML = `
-    <button class="btn btn-primary" onclick="openModal('modal-add-user')">
-      <span class="material-symbols-rounded">person_add</span> Aggiungi utente
-    </button>`;
+if (!can(session, 'manage_cluster')) {
+  showToast('Accesso negato — solo Admin Local', 'danger');
+  setTimeout(() => location.href = 'dashboard.html', 1500);
 }
 
-let users = [];
+let USERS = [];
+let EDIT_ID = null;
 
-// Permission matrix data
+async function init() {
+  await buildSidebar('users');
+  document.getElementById('admin-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="openAddUser()">
+      <span class="material-symbols-rounded">person_add</span> Aggiungi utente
+    </button>`;
+  await loadUsers();
+  switchTab('users');
+}
+
+async function loadUsers() {
+  try {
+    USERS = await usersApi.list();
+  } catch (e) {
+    showToast('Errore caricamento utenti: ' + e.message, 'danger');
+    USERS = [];
+  }
+}
+
 const perms = [
-  { label:'Accesso Dashboard',      desc:'Visualizzazione panoramica',  admin:true,  senior:true,  junior:true  },
-  { label:'Visualizza nodi',         desc:'Statistiche e lista VM',      admin:true,  senior:true,  junior:true  },
-  { label:'Visualizza VM/Container', desc:'Dettaglio singola macchina',  admin:true,  senior:true,  junior:true  },
-  { label:'Avvio / Stop VM',         desc:'Gestione stato macchine',     admin:true,  senior:true,  junior:false },
-  { label:'Reboot / Shutdown',       desc:'Riavvio e spegnimento',       admin:true,  senior:true,  junior:false },
-  { label:'Crea snapshot',           desc:'Snapshot manuali e schedulati', admin:true, senior:true, junior:false },
-  { label:'Elimina snapshot',        desc:'Rimozione snapshot',          admin:true,  senior:true,  junior:false },
-  { label:'Clona VM',                desc:'Copia VM su altro nodo',      admin:true,  senior:true,  junior:false },
-  { label:'Elimina VM',              desc:'Rimozione definitiva',        admin:true,  senior:false, junior:false },
-  { label:'Migrazione VM',           desc:'Spostamento tra nodi',        admin:true,  senior:true,  junior:false },
-  { label:'Backup manuale',          desc:'Avvio backup immediato',      admin:true,  senior:true,  junior:false },
-  { label:'Aggiungi server cluster', desc:'Join nodo a cluster',         admin:true,  senior:false, junior:false },
-  { label:'Gestione utenti',         desc:'Crea/modifica/elimina utenti', admin:true, senior:false, junior:false },
-  { label:'Comandi API avanzati',    desc:'Accesso API Proxmox completo', admin:true, senior:false, junior:false },
+  { label: 'Accesso Dashboard',      desc: 'Visualizzazione panoramica',       admin: true, senior: true,  junior: true  },
+  { label: 'Visualizza nodi',        desc: 'Statistiche e lista VM',           admin: true, senior: true,  junior: true  },
+  { label: 'Visualizza VM/Container',desc: 'Dettaglio singola macchina',       admin: true, senior: true,  junior: true  },
+  { label: 'Avvio / Stop VM',        desc: 'Gestione stato macchine',          admin: true, senior: true,  junior: false },
+  { label: 'Reboot / Shutdown',      desc: 'Riavvio e spegnimento',            admin: true, senior: true,  junior: false },
+  { label: 'Crea snapshot',          desc: 'Snapshot manuali',                 admin: true, senior: true,  junior: false },
+  { label: 'Elimina snapshot',       desc: 'Rimozione snapshot',               admin: true, senior: false, junior: false },
+  { label: 'Rollback snapshot',      desc: 'Ripristino snapshot',              admin: true, senior: true,  junior: false },
+  { label: 'Clona VM',               desc: 'Copia VM su altro nodo',           admin: true, senior: true,  junior: false },
+  { label: 'Elimina VM',             desc: 'Rimozione definitiva',             admin: true, senior: false, junior: false },
+  { label: 'Migrazione VM',          desc: 'Spostamento tra nodi',             admin: true, senior: true,  junior: false },
+  { label: 'Backup manuale',         desc: 'Avvio backup immediato',           admin: true, senior: true,  junior: false },
+  { label: 'Crea VM/CT',             desc: 'Nuove macchine',                   admin: true, senior: true,  junior: false },
+  { label: 'Aggiungi server Proxmox',desc: 'Registra nuovi server',            admin: true, senior: true,  junior: false },
+  { label: 'Rimuovi server Proxmox', desc: 'Cancella credenziali',             admin: true, senior: false, junior: false },
+  { label: 'Gestione utenti',        desc: 'Crea/modifica/elimina utenti',     admin: true, senior: false, junior: false },
 ];
 
-// Proxmox API commands
 const apiCommands = [
-  { cat:'Autenticazione',  cmd:'POST /api2/json/access/ticket',                   desc:'Login — ottenere ticket di autenticazione',     level:'all'   },
-  { cat:'Nodi',            cmd:'GET  /api2/json/nodes',                            desc:'Lista di tutti i nodi del cluster',              level:'all'   },
-  { cat:'Nodi',            cmd:'GET  /api2/json/nodes/{node}/status',              desc:'Stato e statistiche del nodo',                  level:'all'   },
-  { cat:'VM',              cmd:'GET  /api2/json/nodes/{node}/qemu',                desc:'Lista VM su un nodo',                           level:'all'   },
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/start',  desc:'Avvia una VM',                           level:'senior'},
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/stop',   desc:'Ferma una VM (force stop)',               level:'senior'},
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/shutdown', desc:'Shutdown graceful',                     level:'senior'},
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/reboot',  desc:'Riavvia una VM',                         level:'senior'},
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/migrate',  desc:'Migra VM su altro nodo',                       level:'senior'},
-  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/clone',    desc:'Clona VM',                                     level:'senior'},
-  { cat:'VM',              cmd:'DELETE /api2/json/nodes/{node}/qemu/{vmid}',        desc:'Elimina VM (irreversibile)',                    level:'admin' },
-  { cat:'Container',       cmd:'GET  /api2/json/nodes/{node}/lxc',                 desc:'Lista container LXC',                          level:'all'   },
-  { cat:'Container',       cmd:'POST /api2/json/nodes/{node}/lxc/{vmid}/status/start', desc:'Avvia container',                          level:'senior'},
-  { cat:'Container',       cmd:'POST /api2/json/nodes/{node}/lxc/{vmid}/migrate',  desc:'Migra container',                              level:'senior'},
-  { cat:'Snapshot',        cmd:'GET  /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc:'Lista snapshot VM',                           level:'all'   },
-  { cat:'Snapshot',        cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc:'Crea snapshot',                               level:'senior'},
-  { cat:'Snapshot',        cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback', desc:'Ripristina snapshot',         level:'senior'},
-  { cat:'Snapshot',        cmd:'DELETE /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}', desc:'Elimina snapshot',                   level:'admin' },
-  { cat:'Cluster',         cmd:'GET  /api2/json/cluster/status',                   desc:'Stato del cluster',                            level:'all'   },
-  { cat:'Cluster',         cmd:'POST /api2/json/cluster/config/nodes/{node}',      desc:'Aggiungi nodo al cluster',                     level:'admin' },
-  { cat:'Backup',          cmd:'GET  /api2/json/nodes/{node}/vzdump',              desc:'Lista job backup',                              level:'all'   },
-  { cat:'Backup',          cmd:'POST /api2/json/nodes/{node}/vzdump',              desc:'Avvia backup manuale',                         level:'senior'},
-  { cat:'Storage',         cmd:'GET  /api2/json/nodes/{node}/storage',             desc:'Lista storage del nodo',                       level:'all'   },
-  { cat:'Accesso',         cmd:'GET  /api2/json/access/users',                     desc:'Lista utenti',                                  level:'admin' },
-  { cat:'Accesso',         cmd:'POST /api2/json/access/users',                     desc:'Crea nuovo utente',                             level:'admin' },
-  { cat:'Accesso',         cmd:'PUT  /api2/json/access/users/{userid}',            desc:'Modifica utente',                               level:'admin' },
-  { cat:'Accesso',         cmd:'DELETE /api2/json/access/users/{userid}',          desc:'Elimina utente',                                level:'admin' },
+  { cat: 'Autenticazione', cmd: 'POST /api2/json/access/ticket',                     desc: 'Login ticket PVE',                       level: 'all' },
+  { cat: 'Nodi',           cmd: 'GET  /api2/json/nodes',                             desc: 'Lista di tutti i nodi',                  level: 'all' },
+  { cat: 'Nodi',           cmd: 'GET  /api2/json/nodes/{node}/status',               desc: 'Stato e statistiche del nodo',           level: 'all' },
+  { cat: 'Nodi',           cmd: 'GET  /api2/json/nodes/{node}/rrddata',              desc: 'RRD history di un nodo',                 level: 'all' },
+  { cat: 'VM',             cmd: 'GET  /api2/json/nodes/{node}/qemu',                 desc: 'Lista VM su un nodo',                    level: 'all' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu',                 desc: 'Crea VM',                                level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/status/start', desc: 'Avvia una VM',                       level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/status/stop', desc: 'Ferma una VM (force stop)',           level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/status/shutdown', desc: 'Shutdown graceful',               level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/status/reboot', desc: 'Riavvia una VM',                    level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/migrate',  desc: 'Migra VM su altro nodo',                 level: 'senior' },
+  { cat: 'VM',             cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/clone',    desc: 'Clona VM',                               level: 'senior' },
+  { cat: 'VM',             cmd: 'DELETE /api2/json/nodes/{node}/qemu/{vmid}',        desc: 'Elimina VM (irreversibile)',             level: 'admin' },
+  { cat: 'Container',      cmd: 'GET  /api2/json/nodes/{node}/lxc',                  desc: 'Lista container LXC',                    level: 'all' },
+  { cat: 'Container',      cmd: 'POST /api2/json/nodes/{node}/lxc',                  desc: 'Crea container',                         level: 'senior' },
+  { cat: 'Container',      cmd: 'POST /api2/json/nodes/{node}/lxc/{vmid}/status/start', desc: 'Avvia container',                     level: 'senior' },
+  { cat: 'Container',      cmd: 'POST /api2/json/nodes/{node}/lxc/{vmid}/migrate',   desc: 'Migra container',                        level: 'senior' },
+  { cat: 'Snapshot',       cmd: 'GET  /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc: 'Lista snapshot VM',                      level: 'all' },
+  { cat: 'Snapshot',       cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc: 'Crea snapshot',                          level: 'senior' },
+  { cat: 'Snapshot',       cmd: 'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback', desc: 'Ripristina snapshot',   level: 'senior' },
+  { cat: 'Snapshot',       cmd: 'DELETE /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}', desc: 'Elimina snapshot',              level: 'admin' },
+  { cat: 'Cluster',        cmd: 'GET  /api2/json/cluster/status',                    desc: 'Stato del cluster',                      level: 'all' },
+  { cat: 'Cluster',        cmd: 'GET  /api2/json/cluster/resources',                 desc: 'Elenco risorse del cluster',             level: 'all' },
+  { cat: 'Cluster',        cmd: 'POST /api2/json/cluster/config/nodes/{node}',       desc: 'Aggiungi nodo al cluster',               level: 'admin' },
+  { cat: 'Backup',         cmd: 'POST /api2/json/nodes/{node}/vzdump',               desc: 'Avvia backup manuale',                   level: 'senior' },
+  { cat: 'Storage',        cmd: 'GET  /api2/json/nodes/{node}/storage',              desc: 'Lista storage del nodo',                 level: 'all' },
 ];
 
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   const el = document.getElementById('tab-content');
-  if (tab==='users')    el.innerHTML = renderUsers();
-  if (tab==='matrix')   el.innerHTML = renderMatrix();
-  if (tab==='commands') el.innerHTML = renderCommands();
+  if (tab === 'users')    el.innerHTML = renderUsers();
+  if (tab === 'matrix')   el.innerHTML = renderMatrix();
+  if (tab === 'commands') el.innerHTML = renderCommands();
 }
 
-function levelColors(level) {
+function levelColors(role) {
   return {
-    admin:  {bg:'#3a1f0a', text:'var(--accent)',  border:'var(--accent)'},
-    senior: {bg:'var(--info-dim)', text:'var(--info)', border:'var(--info)'},
-    junior: {bg:'var(--success-dim)', text:'var(--success)', border:'var(--success)'},
-  }[level] || {bg:'var(--surface3)', text:'var(--text-muted)', border:'var(--border)'};
+    admin:  { bg: '#3a1f0a',          text: 'var(--accent)',  border: 'var(--accent)' },
+    senior: { bg: 'var(--info-dim)',  text: 'var(--info)',    border: 'var(--info)' },
+    junior: { bg: 'var(--success-dim)', text: 'var(--success)', border: 'var(--success)' },
+  }[role] || { bg: 'var(--surface3)', text: 'var(--text-muted)', border: 'var(--border)' };
+}
+
+function roleLabel(r) {
+  return { admin: 'Admin Local', senior: 'Admin Senior', junior: 'Admin Junior' }[r] || r;
 }
 
 function renderUsers() {
-  const userCards = users.map(u => {
-    const c = levelColors(u.level);
-    const displayName = u.username;
-    const initials = displayName.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-    return `<div class="user-card">
+  if (!USERS.length) {
+    return `<div class="card"><p class="text-muted">Nessun utente registrato.</p></div>`;
+  }
+  const cards = USERS.map(u => {
+    const c = levelColors(u.role);
+    const display = u.full_name || u.username;
+    const initials = display.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    const created = u.created_at ? u.created_at.slice(0, 10) : '-';
+    const last = u.last_login ? u.last_login.slice(0, 16).replace('T', ' ') : 'mai';
+    return `<div class="user-card ${!u.is_active ? 'user-opacity-50' : ''}">
       <div class="user-card-avatar" style="background:${c.bg};color:${c.text};border:2px solid ${c.border}">${initials}</div>
       <div class="user-card-info">
-        <div class="user-card-name">${displayName}</div>
-        <div class="user-card-email">${u.username}</div>
-        <div class="user-card-meta">Ruolo backend: ${u.level}</div>
+        <div class="user-card-name">
+          ${escapeHtml(display)}
+          ${!u.is_active ? '<span class="chip chip-stopped" style="font-size:10px">inattivo</span>' : ''}
+        </div>
+        <div class="user-card-email">${escapeHtml(u.username)}${u.email ? ' · ' + escapeHtml(u.email) : ''}</div>
+        <div class="user-card-meta">Creato: ${created} &nbsp;·&nbsp; Ultimo login: ${last}</div>
       </div>
-      <span class="role-badge ${u.level}">${u.role}</span>
-      ${session.level==='admin' ? `<div class="user-card-actions">
-        <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id},'${u.username}')">
-          <span class="material-symbols-rounded">delete</span>
+      <span class="role-badge ${u.role}">${roleLabel(u.role)}</span>
+      <div class="user-card-actions">
+        <button class="btn btn-sm btn-secondary" onclick="openEditUser(${u.id})" title="Modifica">
+          <span class="material-symbols-rounded">edit</span>
         </button>
-      </div>` : ''}
+        <button class="btn btn-sm ${u.is_active ? 'btn-secondary' : 'btn-success'}" onclick="toggleActive(${u.id}, ${!u.is_active})" title="${u.is_active ? 'Disabilita' : 'Abilita'}">
+          <span class="material-symbols-rounded">${u.is_active ? 'block' : 'check'}</span>
+        </button>
+        ${u.id !== findSelfId() ? `<button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id},'${escapeHtml(display)}')" title="Elimina">
+          <span class="material-symbols-rounded">delete</span>
+        </button>` : ''}
+      </div>
     </div>`;
   }).join('');
+  return `<div style="display:flex;flex-direction:column;gap:10px">${cards}</div>`;
+}
 
-  return `<div style="display:flex;flex-direction:column;gap:10px">${userCards}</div>`;
+function findSelfId() {
+  const me = USERS.find(u => u.username === session.username);
+  return me ? me.id : -1;
 }
 
 function renderMatrix() {
-  const check = (v) => `<div class="perm-check ${v?'yes':'no'}">
-    <span class="material-symbols-rounded" style="font-size:14px">${v?'check':'close'}</span>
+  const check = v => `<div class="perm-check ${v ? 'yes' : 'no'}">
+    <span class="material-symbols-rounded" style="font-size:14px">${v ? 'check' : 'close'}</span>
   </div>`;
   return `
     <div class="role-legend">
@@ -258,11 +291,11 @@ function renderMatrix() {
           </div>
         </div>
       </div>
-      ${perms.map(p=>`
+      ${perms.map(p => `
       <div class="perm-row">
         <div class="perm-label">
-          <div style="font-weight:600;font-size:13px">${p.label}</div>
-          <div class="perm-desc">${p.desc}</div>
+          <div style="font-weight:600;font-size:13px">${escapeHtml(p.label)}</div>
+          <div class="perm-desc">${escapeHtml(p.desc)}</div>
         </div>
         <div class="perm-cols">
           <div style="width:70px;display:flex;justify-content:center">${check(p.admin)}</div>
@@ -274,76 +307,117 @@ function renderMatrix() {
 }
 
 function renderCommands() {
-  const cats = [...new Set(apiCommands.map(c=>c.cat))];
-  const levelColor = {all:'var(--text-muted)', senior:'var(--info)', admin:'var(--accent)'};
-  const levelLabel = {all:'Tutti', senior:'Senior+', admin:'Solo Admin'};
+  const cats = [...new Set(apiCommands.map(c => c.cat))];
+  const levelLabel = { all: 'Tutti', senior: 'Senior+', admin: 'Solo Admin' };
   return cats.map(cat => `
     <div class="card mb-16">
       <div class="card-header">
         <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">terminal</span>
-        <span class="card-title">${cat}</span>
+        <span class="card-title">${escapeHtml(cat)}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr><th>Endpoint</th><th>Descrizione</th><th>Accesso minimo</th></tr></thead>
-        <tbody>${apiCommands.filter(c=>c.cat===cat).map(c=>`
+        <tbody>${apiCommands.filter(c => c.cat === cat).map(c => `
           <tr>
-            <td><code style="font-family:var(--mono);font-size:11.5px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:4px">${c.cmd}</code></td>
-            <td class="text-muted" style="font-size:13px">${c.desc}</td>
-            <td><span class="role-badge ${c.level==='all'?'junior':c.level}" style="font-size:10px">${levelLabel[c.level]}</span></td>
+            <td><code style="font-family:var(--mono);font-size:11.5px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:4px">${escapeHtml(c.cmd)}</code></td>
+            <td class="text-muted" style="font-size:13px">${escapeHtml(c.desc)}</td>
+            <td><span class="role-badge ${c.level === 'all' ? 'junior' : c.level}" style="font-size:10px">${levelLabel[c.level]}</span></td>
           </tr>`).join('')}
         </tbody>
       </table></div>
     </div>`).join('');
 }
 
-async function deleteUser(id, name) {
-  if (!confirm(`Eliminare l'utente "${name}"?`)) return;
-  try {
-    await api(`/api/auth/users/${id}`, { method: 'DELETE' });
-    await loadUsers();
-    switchTab('users');
-    showToast(`Utente ${name} eliminato`, 'warning');
-  } catch (e) {
-    showToast(e.message || 'Errore eliminazione utente', 'danger');
-  }
+// --- CRUD actions ---
+
+function openAddUser() {
+  EDIT_ID = null;
+  document.getElementById('modal-user-title').textContent = 'Aggiungi utente';
+  document.getElementById('save-user-label').textContent = 'Aggiungi';
+  document.getElementById('new-password-label').textContent = 'Password';
+  document.getElementById('new-password').required = true;
+  document.getElementById('new-password').placeholder = '••••••••';
+  document.getElementById('new-name').value = '';
+  document.getElementById('new-username').value = '';
+  document.getElementById('new-email').value = '';
+  document.getElementById('new-password').value = '';
+  document.getElementById('new-role').value = 'junior';
+  document.getElementById('new-username').disabled = false;
+  openModal('modal-add-user');
 }
 
-async function addUser() {
-  const username = document.getElementById('new-username').value;
+function openEditUser(id) {
+  const u = USERS.find(x => x.id === id);
+  if (!u) return;
+  EDIT_ID = id;
+  document.getElementById('modal-user-title').textContent = 'Modifica utente';
+  document.getElementById('save-user-label').textContent = 'Salva';
+  document.getElementById('new-password-label').textContent = 'Nuova password (lascia vuoto per non cambiare)';
+  document.getElementById('new-password').required = false;
+  document.getElementById('new-password').placeholder = 'vuoto = invariata';
+  document.getElementById('new-name').value = u.full_name || '';
+  document.getElementById('new-username').value = u.username;
+  document.getElementById('new-email').value = u.email || '';
+  document.getElementById('new-password').value = '';
+  document.getElementById('new-role').value = u.role;
+  document.getElementById('new-username').disabled = true;  // username is PK
+  openModal('modal-add-user');
+}
+
+async function saveUser() {
+  const name = document.getElementById('new-name').value.trim();
+  const username = document.getElementById('new-username').value.trim();
+  const email = document.getElementById('new-email').value.trim();
   const password = document.getElementById('new-password').value;
-  const level = document.getElementById('new-role').value;
-  if (!username || !password) { showToast('Compila username e password','warning'); return; }
+  const role = document.getElementById('new-role').value;
+
   try {
-    await api('/api/auth/users', {
-      method: 'POST',
-      body: { username, password, role: level },
-    });
+    if (EDIT_ID == null) {
+      if (!username || !password) {
+        showToast('Username e password sono obbligatori', 'warning');
+        return;
+      }
+      await usersApi.create({
+        username, password, full_name: name, email, role,
+      });
+      showToast(`Utente ${username} creato`, 'success');
+    } else {
+      const patch = { full_name: name, email, role };
+      if (password) patch.password = password;
+      await usersApi.update(EDIT_ID, patch);
+      showToast('Utente aggiornato', 'success');
+    }
     closeModal('modal-add-user');
     await loadUsers();
     switchTab('users');
-    showToast(`Utente ${username} aggiunto`, 'success');
   } catch (e) {
-    showToast(e.message || 'Errore creazione utente', 'danger');
+    showToast('Errore: ' + e.message, 'danger');
   }
+}
+
+async function toggleActive(id, nextActive) {
+  try {
+    await usersApi.update(id, { is_active: nextActive });
+    showToast(nextActive ? 'Utente abilitato' : 'Utente disabilitato', nextActive ? 'success' : 'warning');
+    await loadUsers();
+    switchTab('users');
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+}
+
+async function deleteUser(id, name) {
+  if (!confirm(`Eliminare l'utente "${name}"?`)) return;
+  try {
+    await usersApi.remove(id);
+    showToast(`Utente ${name} eliminato`, 'warning');
+    await loadUsers();
+    switchTab('users');
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-async function loadUsers() {
-  const list = await api('/api/auth/users');
-  users = list.map(u => {
-    const level = u.role || (u.is_admin ? 'admin' : 'junior');
-    return {
-      id: u.id,
-      username: u.username,
-      level,
-      role: level.toUpperCase(),
-    };
-  });
-}
-
-loadUsers().then(() => switchTab('users')).catch((e) => showToast(e.message || 'Errore caricamento utenti', 'danger'));
+init();
 </script>
 </body>
 </html>

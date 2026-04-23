@@ -18,16 +18,14 @@
   letter-spacing:.6px; color:var(--text-muted);
   display:flex; align-items:center; gap:8px;
 }
-.vm-list-search {
-  padding:10px 12px; border-bottom:1px solid var(--border);
-}
+.vm-list-search { padding:10px 12px; border-bottom:1px solid var(--border); }
 .vm-list-search input {
   width:100%; padding:7px 12px; border-radius:var(--radius);
   background:var(--surface2); border:1px solid var(--border);
   color:var(--text); font-family:var(--font); font-size:12.5px; outline:none;
 }
 .vm-list-search input:focus { border-color:var(--accent); }
-.vm-list-scroll { flex:1; overflow-y:auto; }
+.vm-list-scroll { flex:1; overflow-y:auto; max-height:calc(100vh - 200px); }
 .vm-list-item {
   display:flex; align-items:center; gap:8px;
   padding:9px 14px; cursor:pointer; transition:background .12s;
@@ -40,7 +38,6 @@
 .vm-list-item .vli-name { font-size:12.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .vm-list-item .vli-sub  { font-size:10.5px; color:var(--text-muted); font-family:var(--mono); }
 
-/* Detail panel */
 .detail-panel { display:flex; flex-direction:column; gap:16px; }
 .detail-header {
   background:var(--surface); border:1px solid var(--border);
@@ -58,7 +55,6 @@
 .detail-sub  { font-size:13px; color:var(--text-muted); margin-top:2px; }
 .action-bar  { display:flex; gap:8px; flex-wrap:wrap; }
 
-/* Charts */
 .charts-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }
 .chart-card {
   background:var(--surface); border:1px solid var(--border);
@@ -69,14 +65,12 @@
 .chart-canvas-wrap { height:80px; position:relative; }
 canvas.sparkline { width:100%; height:100%; }
 
-/* 30-min history chart */
 .history-card {
   background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius-lg); padding:20px;
 }
 .history-card canvas { width:100%; height:160px; display:block; }
 
-/* Snapshot tab */
 .snap-list { display:flex; flex-direction:column; gap:8px; }
 .snap-item {
   display:flex; align-items:center; gap:12px;
@@ -88,7 +82,6 @@ canvas.sparkline { width:100%; height:100%; }
 .snap-item-meta { font-size:11px; color:var(--text-muted); font-family:var(--mono); margin-top:2px; }
 .snap-item-desc { font-size:12px; color:var(--text-muted); margin-top:4px; }
 
-/* Modal confirm */
 .confirm-input {
   width:100%; padding:10px 14px; border-radius:var(--radius);
   background:var(--surface2); border:1px solid var(--border);
@@ -105,7 +98,6 @@ canvas.sparkline { width:100%; height:100%; }
   <main class="main" id="main" style="padding:16px">
 
     <div class="detail-layout" id="detail-layout">
-      <!-- Left: VM list -->
       <div class="vm-list-panel">
         <div class="vm-list-header">
           <span class="material-symbols-rounded" style="font-size:16px">computer</span>
@@ -117,7 +109,6 @@ canvas.sparkline { width:100%; height:100%; }
         <div class="vm-list-scroll" id="vm-list"></div>
       </div>
 
-      <!-- Right: detail -->
       <div class="detail-panel" id="detail-panel">
         <div class="detail-header" style="justify-content:center;color:var(--text-muted)">
           <span class="material-symbols-rounded" style="font-size:40px;color:var(--text-dim)">touch_app</span>
@@ -126,7 +117,7 @@ canvas.sparkline { width:100%; height:100%; }
       </div>
     </div>
 
-    <!-- Modals -->
+    <!-- Modal: delete -->
     <div class="modal-overlay hidden" id="modal-delete">
       <div class="modal">
         <div class="modal-title" style="color:var(--danger)">
@@ -147,19 +138,22 @@ canvas.sparkline { width:100%; height:100%; }
       </div>
     </div>
 
+    <!-- Modal: clone -->
     <div class="modal-overlay hidden" id="modal-clone">
       <div class="modal">
         <div class="modal-title">Clona VM</div>
-        <div class="modal-sub">La VM verrà clonata sul nodo selezionato.</div>
+        <div class="modal-sub">La VM verrà clonata su un altro nodo.</div>
+        <div class="form-group">
+          <label class="form-label">Nuovo VMID</label>
+          <input type="number" class="form-input" id="clone-vmid" placeholder="es. 200"/>
+        </div>
         <div class="form-group">
           <label class="form-label">Nome clone</label>
           <input type="text" class="form-input" id="clone-name" placeholder="nome-clone"/>
         </div>
         <div class="form-group">
           <label class="form-label">Nodo di destinazione</label>
-          <select class="form-input" id="clone-node">
-            ${MOCK_DATA?.nodes?.map(n=>`<option value="${n.id}">${n.name}</option>`).join('')||''}
-          </select>
+          <select class="form-input" id="clone-node"></select>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-clone')">Annulla</button>
@@ -170,10 +164,10 @@ canvas.sparkline { width:100%; height:100%; }
       </div>
     </div>
 
+    <!-- Modal: snapshot -->
     <div class="modal-overlay hidden" id="modal-snapshot">
       <div class="modal">
         <div class="modal-title">Nuovo Snapshot</div>
-        <div class="modal-sub">Crea uno snapshot della VM corrente.</div>
         <div class="form-group">
           <label class="form-label">Nome snapshot</label>
           <input type="text" class="form-input" id="snap-name" placeholder="es. pre-update"/>
@@ -193,160 +187,186 @@ canvas.sparkline { width:100%; height:100%; }
   </main>
 </div>
 
+<script src="api.js"></script>
 <script src="shared.js"></script>
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-buildSidebar('vmdetail');
 
+let DATA = null;
 let activeVMId = null;
-let liveIntervals = [];
-let historyData = { cpu:[], mem:[], disk:[] };
+let allVMs = [];
+let liveSocket = null;
+let historyData = { cpu: [], mem: [], disk: [] };
 const HISTORY_LEN = 30;
 
-// Init history
-function initHistory(vm) {
-  historyData = { cpu:[], mem:[], disk:[] };
-  for (let i=0;i<HISTORY_LEN;i++) {
-    historyData.cpu.push(Math.max(0, vm.cpu + (Math.random()-0.5)*20));
-    historyData.mem.push(Math.max(0, vm.mem + (Math.random()-0.5)*15));
-    historyData.disk.push(vm.disk);
+async function init() {
+  await buildSidebar('vmdetail');
+  const credId = await ensureActiveCred();
+  if (!credId) {
+    document.getElementById('detail-layout').innerHTML = '<div class="card"><p class="text-muted">Nessun server Proxmox configurato. <a href="servers.html" style="color:var(--accent)">Aggiungine uno</a>.</p></div>';
+    return;
   }
-}
+  DATA = await ensureClusterData();
+  allVMs = DATA.vms;
+  renderVMList();
 
-// Live updates
-function startLiveUpdates(vm) {
-  liveIntervals.forEach(clearInterval);
-  liveIntervals = [];
-  const iv = setInterval(()=>{
-    if (!activeVMId || vm.status !== 'running') return;
-    const newCpu = Math.max(0, Math.min(100, historyData.cpu[historyData.cpu.length-1] + (Math.random()-0.5)*8));
-    const newMem = Math.max(0, Math.min(100, historyData.mem[historyData.mem.length-1] + (Math.random()-0.5)*4));
-    historyData.cpu.push(newCpu); if(historyData.cpu.length>HISTORY_LEN) historyData.cpu.shift();
-    historyData.mem.push(newMem); if(historyData.mem.length>HISTORY_LEN) historyData.mem.shift();
-    historyData.disk.push(vm.disk); if(historyData.disk.length>HISTORY_LEN) historyData.disk.shift();
-    updateLiveCharts(vm);
-  }, 1000);
-  liveIntervals.push(iv);
-}
+  const urlId = parseInt(new URLSearchParams(location.search).get('id'));
+  if (urlId && allVMs.find(v => v.id === urlId)) selectVM(urlId);
+  else if (allVMs.length) selectVM(allVMs[0].id);
 
-function updateLiveCharts(vm) {
-  const cpu = historyData.cpu[historyData.cpu.length-1].toFixed(1);
-  const mem = historyData.mem[historyData.mem.length-1].toFixed(1);
-  const cvCpu = document.getElementById('cv-cpu');
-  const cvMem = document.getElementById('cv-mem');
-  const cvHist = document.getElementById('cv-hist');
-  const elCpu = document.getElementById('live-cpu');
-  const elMem = document.getElementById('live-mem');
-  if (elCpu) elCpu.textContent = cpu + '%';
-  if (elMem) elMem.textContent = mem + '%';
-  if (cvCpu) drawSparkline(cvCpu, historyData.cpu, 'var(--accent)');
-  if (cvMem) drawSparkline(cvMem, historyData.mem, 'var(--info)');
-  if (cvHist) drawHistory(cvHist);
-}
-
-function barColor(p){ return p>80?'var(--danger)':p>60?'var(--warning)':'var(--success)'; }
-
-function drawSparkline(canvas, data, color) {
-  const W=canvas.offsetWidth||200, H=canvas.offsetHeight||60;
-  canvas.width=W; canvas.height=H;
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,W,H);
-  if(!data.length) return;
-  const mn=0, mx=100, xStep=W/(data.length-1||1);
-  ctx.beginPath();
-  data.forEach((v,i)=>{
-    const x=i*xStep, y=H-(v-mn)/(mx-mn)*H;
-    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-  });
-  ctx.strokeStyle=color; ctx.lineWidth=2; ctx.stroke();
-  // Fill
-  ctx.lineTo((data.length-1)*xStep,H); ctx.lineTo(0,H); ctx.closePath();
-  ctx.fillStyle=color.replace(')',',0.15)').replace('var(','rgba(').replace(')',')'); 
-  const grad=ctx.createLinearGradient(0,0,0,H);
-  grad.addColorStop(0, color.replace('var(--','').replace(')','') === color ? color+'33' : 'rgba(232,101,26,0.2)');
-  grad.addColorStop(1, 'transparent');
-  ctx.fillStyle=grad; ctx.fill();
-}
-
-function drawHistory(canvas) {
-  const W=canvas.offsetWidth||600, H=canvas.offsetHeight||160;
-  canvas.width=W; canvas.height=H;
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,W,H);
-  const datasets=[
-    {data:historyData.cpu,  color:'#e8651a', label:'CPU'},
-    {data:historyData.mem,  color:'#4d9de0', label:'RAM'},
-  ];
-  // Grid lines
-  ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.lineWidth=1;
-  [25,50,75].forEach(y=>{
-    const py=H-(y/100)*H;
-    ctx.beginPath(); ctx.moveTo(0,py); ctx.lineTo(W,py); ctx.stroke();
-    ctx.fillStyle='rgba(255,255,255,0.2)'; ctx.font='10px JetBrains Mono,monospace';
-    ctx.fillText(y+'%',4,py-3);
-  });
-  datasets.forEach(ds=>{
-    if(!ds.data.length) return;
-    const xStep=W/(ds.data.length-1||1);
-    ctx.beginPath();
-    ds.data.forEach((v,i)=>{
-      const x=i*xStep, y=H-(v/100)*H;
-      i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
-    });
-    ctx.strokeStyle=ds.color; ctx.lineWidth=2.5; ctx.stroke();
-  });
-  // Legend
-  datasets.forEach((ds,i)=>{
-    ctx.fillStyle=ds.color; ctx.fillRect(W-80+i*38,8,12,3);
-    ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='10px Plus Jakarta Sans,sans-serif';
-    ctx.fillText(ds.label,W-64+i*38,14);
+  document.getElementById('delete-confirm-input').addEventListener('input', function () {
+    document.getElementById('delete-confirm-btn').disabled = (this.value !== this.getAttribute('data-expected'));
   });
 }
 
-// Render VM list
-let allVMs = MOCK_DATA.vms;
-function renderVMList(filter='') {
+function renderVMList(filter = '') {
   const items = allVMs.filter(v => !filter ||
     v.name.toLowerCase().includes(filter.toLowerCase()) ||
     String(v.id).includes(filter));
   document.getElementById('vm-list').innerHTML = items.map(vm => `
-    <div class="vm-list-item ${vm.id===activeVMId?'active':''}" onclick="selectVM(${vm.id})">
-      <span class="material-symbols-rounded vli-icon" style="color:${vm.status==='running'?'var(--success)':'var(--text-dim)'}">
-        ${vm.type==='vm'?'computer':'deployed_code'}
+    <div class="vm-list-item ${vm.id === activeVMId ? 'active' : ''}" onclick="selectVM(${vm.id})">
+      <span class="material-symbols-rounded vli-icon" style="color:${vm.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">
+        ${vm.type === 'vm' ? 'computer' : 'deployed_code'}
       </span>
       <div class="vli-info">
-        <div class="vli-name">${vm.name}</div>
+        <div class="vli-name">${escapeHtml(vm.name)}</div>
         <div class="vli-sub">${vm.type.toUpperCase()} · ${vm.id} · ${vm.node}</div>
       </div>
-      <span class="status-dot ${vm.status==='running'?'running':'stopped'}"></span>
+      <span class="status-dot ${vm.status === 'running' ? 'running' : 'stopped'}"></span>
     </div>`).join('');
 }
-function filterVMs(v){ renderVMList(v); }
+function filterVMs(v) { renderVMList(v); }
 
-function selectVM(id) {
+async function selectVM(id) {
   activeVMId = id;
   renderVMList(document.getElementById('vm-search').value);
-  const vm = MOCK_DATA.vms.find(v=>v.id===id);
+  const vm = allVMs.find(v => v.id === id);
   if (!vm) return;
   initHistory(vm);
-  renderDetail(vm);
-  if (vm.status==='running') startLiveUpdates(vm);
-  history.replaceState(null,'','?id='+id);
+  await renderDetail(vm);
+  if (vm.status === 'running') openLiveSocket(vm);
+  history.replaceState(null, '', '?id=' + id);
 }
 
-function renderDetail(vm) {
-  const typeIcon = vm.type==='vm' ? 'computer' : 'deployed_code';
-  const typeColor = vm.type==='vm' ? 'var(--info)' : '#5dd05d';
-  const snaps = MOCK_DATA.snapshots[vm.id] || [];
+function initHistory(vm) {
+  historyData = { cpu: [], mem: [], disk: [] };
+  for (let i = 0; i < HISTORY_LEN; i++) {
+    historyData.cpu.push(vm.cpu || 0);
+    historyData.mem.push(vm.mem || 0);
+    historyData.disk.push(vm.disk || 0);
+  }
+}
+
+function openLiveSocket(vm) {
+  if (liveSocket) { try { liveSocket.close(); } catch {} liveSocket = null; }
+  const token = getToken();
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/api/ws/stats?token=${encodeURIComponent(token)}`;
+  liveSocket = new WebSocket(url);
+  liveSocket.addEventListener('open', () => {
+    liveSocket.send(JSON.stringify({
+      type: 'subscribe',
+      cred_id: getActiveCred(),
+      target: `${vm.kind}/${vm.node}/${vm.id}`,
+    }));
+  });
+  liveSocket.addEventListener('message', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.error) return;
+      const cpuPct = Math.round((msg.cpu || 0) * 100);
+      const memPct = Math.round((msg.mem || 0) * 100);
+      const diskPct = Math.round((msg.disk || 0) * 100);
+      historyData.cpu.push(cpuPct); if (historyData.cpu.length > HISTORY_LEN) historyData.cpu.shift();
+      historyData.mem.push(memPct); if (historyData.mem.length > HISTORY_LEN) historyData.mem.shift();
+      historyData.disk.push(diskPct); if (historyData.disk.length > HISTORY_LEN) historyData.disk.shift();
+      const elCpu = document.getElementById('live-cpu');
+      const elMem = document.getElementById('live-mem');
+      if (elCpu) elCpu.textContent = cpuPct + '%';
+      if (elMem) elMem.textContent = memPct + '%';
+      const cvCpu = document.getElementById('cv-cpu');
+      const cvMem = document.getElementById('cv-mem');
+      const cvHist = document.getElementById('cv-hist');
+      if (cvCpu) drawSparkline(cvCpu, historyData.cpu, '#e8651a');
+      if (cvMem) drawSparkline(cvMem, historyData.mem, '#4d9de0');
+      if (cvHist) drawHistory(cvHist);
+    } catch {}
+  });
+}
+
+function barColor(p) { return p > 80 ? 'var(--danger)' : p > 60 ? 'var(--warning)' : 'var(--success)'; }
+
+function drawSparkline(canvas, data, color) {
+  const W = canvas.offsetWidth || 200, H = canvas.offsetHeight || 60;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  if (!data.length) return;
+  const xStep = W / (data.length - 1 || 1);
+  ctx.beginPath();
+  data.forEach((v, i) => {
+    const x = i * xStep, y = H - (v / 100) * H;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+  ctx.lineTo((data.length - 1) * xStep, H); ctx.lineTo(0, H); ctx.closePath();
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, color + '33');
+  grad.addColorStop(1, 'transparent');
+  ctx.fillStyle = grad; ctx.fill();
+}
+
+function drawHistory(canvas) {
+  const W = canvas.offsetWidth || 600, H = canvas.offsetHeight || 160;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  const datasets = [
+    { data: historyData.cpu, color: '#e8651a', label: 'CPU' },
+    { data: historyData.mem, color: '#4d9de0', label: 'RAM' },
+  ];
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.lineWidth = 1;
+  [25, 50, 75].forEach(y => {
+    const py = H - (y / 100) * H;
+    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(W, py); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.2)'; ctx.font = '10px JetBrains Mono,monospace';
+    ctx.fillText(y + '%', 4, py - 3);
+  });
+  datasets.forEach(ds => {
+    if (!ds.data.length) return;
+    const xStep = W / (ds.data.length - 1 || 1);
+    ctx.beginPath();
+    ds.data.forEach((v, i) => {
+      const x = i * xStep, y = H - (v / 100) * H;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = ds.color; ctx.lineWidth = 2.5; ctx.stroke();
+  });
+  datasets.forEach((ds, i) => {
+    ctx.fillStyle = ds.color; ctx.fillRect(W - 80 + i * 38, 8, 12, 3);
+    ctx.fillStyle = 'rgba(255,255,255,0.6)'; ctx.font = '10px Plus Jakarta Sans,sans-serif';
+    ctx.fillText(ds.label, W - 64 + i * 38, 14);
+  });
+}
+
+async function renderDetail(vm) {
+  const typeIcon = vm.type === 'vm' ? 'computer' : 'deployed_code';
+  const typeColor = vm.type === 'vm' ? 'var(--info)' : '#5dd05d';
+
+  let snaps = [];
+  try {
+    snaps = await snapApi.list(getActiveCred(), vm.kind, vm.node, vm.id);
+    snaps = snaps.filter(s => s.name !== 'current');
+  } catch (e) { /* silent */ }
 
   const actionBar = `
-    ${can(session,'start')    ? `<button class="btn btn-success btn-sm" onclick="vmAction('start',${vm.id})"><span class="material-symbols-rounded">play_arrow</span> Start</button>` : ''}
-    ${can(session,'stop')     ? `<button class="btn btn-danger btn-sm"  onclick="vmAction('stop',${vm.id})"><span class="material-symbols-rounded">stop</span> Stop</button>` : ''}
-    ${can(session,'shutdown') ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('shutdown',${vm.id})"><span class="material-symbols-rounded">power_settings_new</span> Shutdown</button>` : ''}
-    ${can(session,'reboot')   ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('reboot',${vm.id})"><span class="material-symbols-rounded">restart_alt</span> Reboot</button>` : ''}
-    ${can(session,'clone')    ? `<button class="btn btn-secondary btn-sm" onclick="openModal('modal-clone')"><span class="material-symbols-rounded">content_copy</span> Clona</button>` : ''}
-    ${can(session,'delete')   ? `<button class="btn btn-danger btn-sm"    onclick="openDelete(${vm.id})"><span class="material-symbols-rounded">delete</span> Elimina</button>` : ''}
+    ${can(session, 'start')    && vm.status !== 'running' ? `<button class="btn btn-success btn-sm" onclick="vmAction('start')"><span class="material-symbols-rounded">play_arrow</span> Start</button>` : ''}
+    ${can(session, 'stop')     && vm.status === 'running' ? `<button class="btn btn-danger btn-sm"  onclick="vmAction('stop')"><span class="material-symbols-rounded">stop</span> Stop</button>` : ''}
+    ${can(session, 'shutdown') && vm.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('shutdown')"><span class="material-symbols-rounded">power_settings_new</span> Shutdown</button>` : ''}
+    ${can(session, 'reboot')   && vm.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('reboot')"><span class="material-symbols-rounded">restart_alt</span> Reboot</button>` : ''}
+    ${can(session, 'clone')    ? `<button class="btn btn-secondary btn-sm" onclick="openCloneModal()"><span class="material-symbols-rounded">content_copy</span> Clona</button>` : ''}
+    ${can(session, 'delete')   ? `<button class="btn btn-danger btn-sm"    onclick="openDelete()"><span class="material-symbols-rounded">delete</span> Elimina</button>` : ''}
   `;
 
   document.getElementById('detail-panel').innerHTML = `
@@ -355,16 +375,16 @@ function renderDetail(vm) {
         <span class="material-symbols-rounded" style="color:${typeColor}">${typeIcon}</span>
       </div>
       <div class="detail-meta">
-        <div class="detail-name">${vm.name}</div>
+        <div class="detail-name">${escapeHtml(vm.name)}</div>
         <div class="detail-sub">
-          <span class="chip ${vm.type==='vm'?'chip-vm':'chip-ct'}">${vm.type.toUpperCase()}</span>
-          &nbsp;ID: <span class="mono">${vm.id}</span> &nbsp;·&nbsp; Nodo: <b>${vm.node}</b> &nbsp;·&nbsp; ${vm.os}
+          <span class="chip ${vm.type === 'vm' ? 'chip-vm' : 'chip-ct'}">${vm.type.toUpperCase()}</span>
+          &nbsp;ID: <span class="mono">${vm.id}</span> &nbsp;·&nbsp; Nodo: <b>${escapeHtml(vm.node)}</b>
+          &nbsp;·&nbsp; Stato: <span class="chip ${vm.status === 'running' ? 'chip-running' : 'chip-stopped'}">${vm.status}</span>
         </div>
       </div>
       <div class="action-bar">${actionBar}</div>
     </div>
 
-    <!-- Live charts -->
     <div class="charts-grid">
       <div class="chart-card">
         <div class="chart-title">CPU</div>
@@ -383,124 +403,170 @@ function renderDetail(vm) {
       </div>
     </div>
 
-    <!-- 30-min history -->
     <div class="history-card">
       <div class="flex items-center justify-between mb-16">
         <div>
-          <div class="card-title">Storico 30 minuti</div>
-          <div class="text-xs text-muted">Aggiornamento ogni secondo</div>
+          <div class="card-title">Storico live</div>
+          <div class="text-xs text-muted">Aggiornamento in tempo reale via WebSocket</div>
         </div>
-        ${vm.status==='running' ? '<span class="chip chip-running">LIVE</span>' : ''}
+        ${vm.status === 'running' ? '<span class="chip chip-running">LIVE</span>' : ''}
       </div>
       <canvas id="cv-hist" style="width:100%;height:160px"></canvas>
     </div>
 
-    <!-- Tabs: Snapshot -->
     <div class="card">
       <div class="card-header" style="justify-content:space-between">
         <div class="flex items-center gap-8">
           <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">camera</span>
           <span class="card-title">Snapshot (${snaps.length})</span>
         </div>
-        ${can(session,'start') ? `<button class="btn btn-secondary btn-sm" onclick="openModal('modal-snapshot')">
+        ${can(session, 'snapshot_create') ? `<button class="btn btn-secondary btn-sm" onclick="openModal('modal-snapshot')">
           <span class="material-symbols-rounded">add</span> Nuovo snapshot
         </button>` : ''}
       </div>
-      ${snaps.length ? `<div class="snap-list">${snaps.map(s=>`
+      ${snaps.length ? `<div class="snap-list">${snaps.map(s => `
         <div class="snap-item">
           <span class="material-symbols-rounded" style="color:var(--accent);font-size:20px">camera</span>
           <div class="snap-item-info">
-            <div class="snap-item-name">${s.name}</div>
-            <div class="snap-item-meta">${s.date}</div>
-            <div class="snap-item-desc">${s.desc}</div>
+            <div class="snap-item-name">${escapeHtml(s.name)}</div>
+            <div class="snap-item-meta">${s.snaptime ? new Date(s.snaptime * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''}</div>
+            <div class="snap-item-desc">${escapeHtml(s.description || '')}</div>
           </div>
-          ${can(session,'start') ? `<div class="flex gap-8">
-            <button class="btn btn-sm btn-secondary" onclick="showToast('Ripristino in corso...','info')">
+          ${can(session, 'start') ? `<div class="flex gap-8">
+            <button class="btn btn-sm btn-secondary" onclick="rollbackSnap('${encodeURIComponent(s.name)}')">
               <span class="material-symbols-rounded">restore</span>
             </button>
-            <button class="btn btn-sm btn-danger" onclick="showToast('Snapshot eliminato','warning')">
+            ${can(session, 'snapshot_delete') ? `<button class="btn btn-sm btn-danger" onclick="deleteSnap('${encodeURIComponent(s.name)}')">
               <span class="material-symbols-rounded">delete</span>
-            </button>
+            </button>` : ''}
           </div>` : ''}
         </div>`).join('')}</div>` : `<div class="text-muted text-sm" style="padding:8px 0">Nessuno snapshot disponibile.</div>`}
     </div>
   `;
 
-  // Draw initial charts
-  setTimeout(()=>{
+  setTimeout(() => {
     const cvCpu  = document.getElementById('cv-cpu');
     const cvMem  = document.getElementById('cv-mem');
     const cvDisk = document.getElementById('cv-disk');
     const cvHist = document.getElementById('cv-hist');
-    if(cvCpu)  drawSparkline(cvCpu,  historyData.cpu,  '#e8651a');
-    if(cvMem)  drawSparkline(cvMem,  historyData.mem,  '#4d9de0');
-    if(cvDisk) drawSparkline(cvDisk, historyData.disk, '#f0b030');
-    if(cvHist) drawHistory(cvHist);
+    if (cvCpu)  drawSparkline(cvCpu,  historyData.cpu,  '#e8651a');
+    if (cvMem)  drawSparkline(cvMem,  historyData.mem,  '#4d9de0');
+    if (cvDisk) drawSparkline(cvDisk, historyData.disk, '#f0b030');
+    if (cvHist) drawHistory(cvHist);
   }, 50);
 }
 
-function vmAction(action, id) {
-  const vm = MOCK_DATA.vms.find(v=>v.id===id);
-  const labels = {start:'avviata',stop:'fermata',reboot:'riavviata',shutdown:'spenta'};
+async function vmAction(action) {
+  const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
-  if(action==='start')    { vm.status='running'; startLiveUpdates(vm); }
-  if(action==='stop'||action==='shutdown') vm.status='stopped';
-  showToast(`${vm.name} ${labels[action]||action}`, action==='stop'||action==='shutdown'?'warning':'success');
+  try {
+    await vmsApi[action](getActiveCred(), vm.kind, vm.node, vm.id);
+    showToast(`Comando ${action} inviato a ${vm.name}`, 'success');
+    setTimeout(async () => {
+      await refreshClusterData();
+      DATA = CLUSTER_DATA; allVMs = DATA.vms;
+      const fresh = allVMs.find(v => v.id === activeVMId);
+      if (fresh) { await renderDetail(fresh); if (fresh.status === 'running') openLiveSocket(fresh); }
+      renderVMList(document.getElementById('vm-search').value);
+    }, 1500);
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
 }
 
-let pendingDeleteId = null;
-function openDelete(id) {
-  pendingDeleteId = id;
-  const vm = MOCK_DATA.vms.find(v=>v.id===id);
+function openDelete() {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
   document.getElementById('delete-confirm-input').value = '';
   document.getElementById('delete-confirm-btn').disabled = true;
-  document.getElementById('delete-confirm-input').setAttribute('data-expected', vm?.name||'');
+  document.getElementById('delete-confirm-input').setAttribute('data-expected', vm.name);
   openModal('modal-delete');
 }
-document.addEventListener('DOMContentLoaded', ()=>{
-  document.getElementById('delete-confirm-input').addEventListener('input', function(){
-    document.getElementById('delete-confirm-btn').disabled = (this.value !== this.getAttribute('data-expected'));
-  });
-});
-function executeDelete() {
-  const vm = MOCK_DATA.vms.find(v=>v.id===pendingDeleteId);
+
+async function executeDelete() {
+  const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
-  MOCK_DATA.vms = MOCK_DATA.vms.filter(v=>v.id!==pendingDeleteId);
-  allVMs = MOCK_DATA.vms;
-  activeVMId = null;
-  renderVMList();
-  document.getElementById('detail-panel').innerHTML = '<div class="detail-header" style="justify-content:center;color:var(--text-muted)"><span class="material-symbols-rounded" style="font-size:40px;color:var(--text-dim)">touch_app</span><span>Seleziona una VM dalla lista</span></div>';
-  closeModal('modal-delete');
-  showToast(`VM ${vm.name} eliminata`, 'danger');
-}
-function executeClone() {
-  const name = document.getElementById('clone-name').value||'clone-vm';
-  const node = document.getElementById('clone-node').value;
-  closeModal('modal-clone');
-  showToast(`Clonazione di "${name}" su ${node} avviata`, 'info');
-}
-function executeSnapshot() {
-  const name = document.getElementById('snap-name').value||'snapshot';
-  const desc = document.getElementById('snap-desc').value;
-  if (activeVMId) {
-    if (!MOCK_DATA.snapshots[activeVMId]) MOCK_DATA.snapshots[activeVMId] = [];
-    const now = new Date().toISOString().slice(0,16).replace('T',' ');
-    MOCK_DATA.snapshots[activeVMId].unshift({id:'s'+Date.now(), name, date:now, desc});
-    const vm = MOCK_DATA.vms.find(v=>v.id===activeVMId);
-    if(vm) renderDetail(vm);
+  try {
+    await vmsApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, vm.name);
+    closeModal('modal-delete');
+    showToast(`VM ${vm.name} eliminata`, 'danger');
+    await refreshClusterData();
+    DATA = CLUSTER_DATA; allVMs = DATA.vms; activeVMId = null;
+    renderVMList();
+    document.getElementById('detail-panel').innerHTML = '<div class="detail-header" style="justify-content:center;color:var(--text-muted)"><span class="material-symbols-rounded" style="font-size:40px;color:var(--text-dim)">touch_app</span><span>Seleziona una VM dalla lista</span></div>';
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
   }
-  closeModal('modal-snapshot');
-  showToast(`Snapshot "${name}" creato`, 'success');
+}
+
+function openCloneModal() {
+  const sel = document.getElementById('clone-node');
+  sel.innerHTML = DATA.nodes.map(n => `<option value="${n.id}">${escapeHtml(n.name)}</option>`).join('');
+  document.getElementById('clone-vmid').value = '';
+  document.getElementById('clone-name').value = '';
+  openModal('modal-clone');
+}
+
+async function executeClone() {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+  const newid = parseInt(document.getElementById('clone-vmid').value);
+  const name  = document.getElementById('clone-name').value || null;
+  const targetNode = document.getElementById('clone-node').value;
+  if (!newid) { showToast('Inserisci un VMID numerico', 'warning'); return; }
+  try {
+    await vmsApi.clone(getActiveCred(), vm.kind, vm.node, vm.id, {
+      newid, name, target_node: targetNode, full: true,
+    });
+    closeModal('modal-clone');
+    showToast(`Clonazione avviata`, 'info');
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+async function executeSnapshot() {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+  const name = document.getElementById('snap-name').value || 'snapshot';
+  const desc = document.getElementById('snap-desc').value;
+  try {
+    await snapApi.create(getActiveCred(), vm.kind, vm.node, vm.id, {
+      snapname: name, description: desc,
+    });
+    closeModal('modal-snapshot');
+    showToast(`Snapshot "${name}" creato`, 'success');
+    await renderDetail(vm);
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+async function rollbackSnap(name) {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+  if (!confirm(`Ripristinare lo snapshot "${decodeURIComponent(name)}"?`)) return;
+  try {
+    await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, decodeURIComponent(name));
+    showToast('Rollback avviato', 'info');
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+}
+
+async function deleteSnap(name) {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+  if (!confirm(`Eliminare lo snapshot "${decodeURIComponent(name)}"?`)) return;
+  try {
+    await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, decodeURIComponent(name));
+    showToast('Snapshot eliminato', 'warning');
+    await renderDetail(vm);
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-// Init
-const urlId = parseInt(new URLSearchParams(location.search).get('id'));
-renderVMList();
-if (urlId && MOCK_DATA.vms.find(v=>v.id===urlId)) selectVM(urlId);
-else if (MOCK_DATA.vms.length) selectVM(MOCK_DATA.vms[0].id);
+init();
 </script>
 </body>
 </html>

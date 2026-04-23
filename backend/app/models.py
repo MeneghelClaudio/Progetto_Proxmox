@@ -14,13 +14,20 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     username = Column(String(64), unique=True, nullable=False, index=True)
+    full_name = Column(String(128), default="", nullable=False)
+    email = Column(String(128), default="", nullable=False)
     password_hash = Column(String(255), nullable=False)
-    role = Column(String(16), default="junior", nullable=False)
-    is_admin = Column(Boolean, default=False, nullable=False)
+    role = Column(String(16), default="junior", nullable=False)  # admin | senior | junior
+    is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_login = Column(DateTime, nullable=True)
 
     credentials = relationship("ProxmoxCredential", back_populates="user",
                                cascade="all, delete-orphan")
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role == "admin"
 
 
 class ProxmoxCredential(Base):

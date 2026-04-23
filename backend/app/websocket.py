@@ -1,17 +1,5 @@
 """
 Push live stats (CPU / RAM / disk / net) over WebSocket once per second.
-
-The client sends an initial JSON message:
-    {"type": "subscribe", "cred_id": 1, "target": "node/pve1"}
-    {"type": "subscribe", "cred_id": 1, "target": "qemu/pve1/100"}
-    {"type": "subscribe", "cred_id": 1, "target": "lxc/pve1/201"}
-
-The server pushes at 1 Hz:
-    {"t": 1712000000, "cpu": 0.12, "mem": 0.34, "memBytes": ..., "disk": 0.56,
-     "netin": 1234, "netout": 456, "status": "running"}
-
-Internally we simply poll the PVE REST API; keeping it at 1 s is safe for small
-homelab clusters, tune via POLL_INTERVAL env var.
 """
 
 from __future__ import annotations

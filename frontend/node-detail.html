@@ -14,14 +14,10 @@
 }
 .metric-header { display:flex; align-items:center; justify-content:space-between; }
 .metric-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); }
-.metric-pct { font-size:26px; font-weight:800; font-family:var(--mono); line-height:1; }
 .metric-detail { font-size:11px; color:var(--text-muted); }
 .ring-wrap { display:flex; align-items:center; justify-content:center; }
 
-/* Node selector */
-.node-selector {
-  display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap;
-}
+.node-selector { display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap; }
 .node-pill {
   display:flex; align-items:center; gap:6px;
   padding:7px 14px; border-radius:20px; cursor:pointer;
@@ -30,9 +26,6 @@
 }
 .node-pill:hover { border-color:var(--border2); }
 .node-pill.active { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
-
-/* Table section */
-.section-sep { height:1px; background:var(--border); margin:24px 0; }
 </style>
 </head>
 <body>
@@ -53,21 +46,38 @@
   </main>
 </div>
 
+<script src="api.js"></script>
 <script src="shared.js"></script>
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-buildSidebar('nodes');
+let activeNodeId = null;
+let DATA = null;
 
-const params = new URLSearchParams(location.search);
-let activeNodeId = params.get('id') || MOCK_DATA.nodes[0].id;
+async function init() {
+  await buildSidebar('nodes');
+  const credId = await ensureActiveCred();
+  if (!credId) {
+    document.getElementById('node-content').innerHTML = `<div class="card"><p class="text-muted">Nessun server Proxmox configurato. <a href="servers.html" style="color:var(--accent)">Aggiungine uno</a>.</p></div>`;
+    return;
+  }
+  DATA = await ensureClusterData();
+  const params = new URLSearchParams(location.search);
+  activeNodeId = params.get('id') || DATA.nodes[0]?.id;
+  if (!activeNodeId) {
+    document.getElementById('node-content').innerHTML = `<div class="card"><p class="text-muted">Nessun nodo disponibile.</p></div>`;
+    return;
+  }
+  renderNodeSelector();
+  renderNode();
+}
 
 function renderNodeSelector() {
-  document.getElementById('node-selector').innerHTML = MOCK_DATA.nodes.map(n => `
-    <div class="node-pill ${n.id===activeNodeId?'active':''}" onclick="selectNode('${n.id}')">
-      <span class="status-dot ${n.status==='running'?'running':'stopped'}"></span>
+  document.getElementById('node-selector').innerHTML = DATA.nodes.map(n => `
+    <div class="node-pill ${n.id === activeNodeId ? 'active' : ''}" onclick="selectNode('${n.id}')">
+      <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
       <span class="material-symbols-rounded" style="font-size:16px">storage</span>
-      ${n.name}
+      ${escapeHtml(n.name)}
     </div>`).join('');
 }
 
@@ -75,14 +85,14 @@ function selectNode(id) {
   activeNodeId = id;
   renderNodeSelector();
   renderNode();
-  history.replaceState(null,'','?id='+id);
+  history.replaceState(null, '', '?id=' + id);
 }
 
-function barColor(p){ return p>80?'var(--danger)':p>60?'var(--warning)':'var(--success)'; }
+function barColor(p) { return p > 80 ? 'var(--danger)' : p > 60 ? 'var(--warning)' : 'var(--success)'; }
 
 function makeRing(pct, color) {
-  const r=28, cx=34, cy=34, circ=2*Math.PI*r;
-  const dash=circ*(pct/100), gap=circ-dash;
+  const r = 28, cx = 34, cy = 34, circ = 2 * Math.PI * r;
+  const dash = circ * (pct / 100), gap = circ - dash;
   return `<svg width="68" height="68" viewBox="0 0 68 68">
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--surface3)" stroke-width="6"/>
     <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="6"
@@ -94,26 +104,22 @@ function makeRing(pct, color) {
 }
 
 function renderNode() {
-  const node = MOCK_DATA.nodes.find(n=>n.id===activeNodeId);
+  const node = DATA.nodes.find(n => n.id === activeNodeId);
   if (!node) return;
   document.getElementById('page-title').textContent = `Nodo: ${node.name}`;
   document.getElementById('page-sub').textContent = `Uptime: ${node.uptime} · ${node.maxcpu} CPU · ${node.maxmem} GB RAM`;
 
-  if (can(session,'start')) {
+  if (can(session, 'start')) {
     document.getElementById('page-actions').innerHTML = `
-      <button class="btn btn-secondary btn-sm" onclick="showToast('Backup nodo avviato','info')">
-        <span class="material-symbols-rounded">backup</span> Backup nodo
-      </button>
-      <button class="btn btn-secondary btn-sm" onclick="showToast('Snapshot creato','success')">
-        <span class="material-symbols-rounded">camera</span> Snapshot
+      <button class="btn btn-secondary btn-sm" onclick="location.reload()">
+        <span class="material-symbols-rounded">refresh</span> Aggiorna
       </button>`;
   }
 
-  const vms = MOCK_DATA.vms.filter(v=>v.node===node.id && v.type==='vm');
-  const cts = MOCK_DATA.vms.filter(v=>v.node===node.id && v.type==='ct');
+  const vms = DATA.vms.filter(v => v.node === node.id && v.type === 'vm');
+  const cts = DATA.vms.filter(v => v.node === node.id && v.type === 'ct');
 
   document.getElementById('node-content').innerHTML = `
-    <!-- Metric cards -->
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-header">
@@ -129,7 +135,7 @@ function renderNode() {
           <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">storage</span>
         </div>
         <div class="ring-wrap">${makeRing(node.mem, barColor(node.mem))}</div>
-        <div class="metric-detail">${Math.round(node.maxmem*node.mem/100)} GB / ${node.maxmem} GB</div>
+        <div class="metric-detail">${Math.round(node.maxmem * node.mem / 100)} GB / ${node.maxmem} GB</div>
       </div>
       <div class="metric-card">
         <div class="metric-header">
@@ -140,12 +146,10 @@ function renderNode() {
         <div class="metric-detail">Utilizzo storage locale</div>
       </div>
       <div class="metric-card" style="justify-content:space-between">
-        <div class="metric-header">
-          <span class="metric-label">Stato</span>
-        </div>
+        <div class="metric-header"><span class="metric-label">Stato</span></div>
         <div>
-          <span class="chip ${node.status==='running'?'chip-running':'chip-stopped'}" style="font-size:14px;padding:6px 12px">
-            <span class="status-dot ${node.status==='running'?'running':'stopped'}"></span>
+          <span class="chip ${node.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="font-size:14px;padding:6px 12px">
+            <span class="status-dot ${node.status === 'running' ? 'running' : 'stopped'}"></span>
             ${node.status}
           </span>
         </div>
@@ -153,7 +157,6 @@ function renderNode() {
       </div>
     </div>
 
-    <!-- VMs table -->
     <div class="card">
       <div class="card-header">
         <span class="material-symbols-rounded" style="font-size:18px;color:var(--info)">computer</span>
@@ -162,31 +165,15 @@ function renderNode() {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th>OS</th><th></th>
+            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th></th>
           </tr></thead>
-          <tbody>${vms.map(vm=>`<tr>
-            <td class="mono">${vm.id}</td>
-            <td><a href="vm-detail.html?id=${vm.id}" style="color:var(--text);font-weight:600">${vm.name}</a></td>
-            <td><span class="chip ${vm.status==='running'?'chip-running':'chip-stopped'}">${vm.status}</span></td>
-            <td><span style="color:${barColor(vm.cpu)}">${vm.cpu}%</span></td>
-            <td><span style="color:${barColor(vm.mem)}">${vm.mem}%</span></td>
-            <td>${vm.disk} GB</td>
-            <td class="text-muted">${vm.os}</td>
-            <td>
-              <div class="flex gap-8">
-                ${can(session,'start') ? `<button class="btn btn-sm btn-success" onclick="vmAction('start',${vm.id})"><span class="material-symbols-rounded">play_arrow</span></button>` : ''}
-                ${can(session,'stop')  ? `<button class="btn btn-sm btn-danger"  onclick="vmAction('stop',${vm.id})"><span class="material-symbols-rounded">stop</span></button>` : ''}
-                <a href="vm-detail.html?id=${vm.id}" class="btn btn-sm btn-secondary"><span class="material-symbols-rounded">open_in_new</span></a>
-              </div>
-            </td>
-          </tr>`).join('')}</tbody>
+          <tbody>${vms.length ? vms.map(vm => renderVMRow(vm)).join('') : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessuna VM su questo nodo</td></tr>'}</tbody>
         </table>
       </div>
     </div>
 
     <div style="height:16px"></div>
 
-    <!-- CT table -->
     <div class="card">
       <div class="card-header">
         <span class="material-symbols-rounded" style="font-size:18px;color:#5dd05d">deployed_code</span>
@@ -195,38 +182,47 @@ function renderNode() {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th>OS</th><th></th>
+            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th></th>
           </tr></thead>
-          <tbody>${cts.map(ct=>`<tr>
-            <td class="mono">${ct.id}</td>
-            <td><a href="vm-detail.html?id=${ct.id}" style="color:var(--text);font-weight:600">${ct.name}</a></td>
-            <td><span class="chip ${ct.status==='running'?'chip-running':'chip-stopped'}">${ct.status}</span></td>
-            <td><span style="color:${barColor(ct.cpu)}">${ct.cpu}%</span></td>
-            <td><span style="color:${barColor(ct.mem)}">${ct.mem}%</span></td>
-            <td>${ct.disk} GB</td>
-            <td class="text-muted">${ct.os}</td>
-            <td>
-              <div class="flex gap-8">
-                ${can(session,'start') ? `<button class="btn btn-sm btn-success" onclick="vmAction('start',${ct.id})"><span class="material-symbols-rounded">play_arrow</span></button>` : ''}
-                ${can(session,'stop')  ? `<button class="btn btn-sm btn-danger"  onclick="vmAction('stop',${ct.id})"><span class="material-symbols-rounded">stop</span></button>` : ''}
-                <a href="vm-detail.html?id=${ct.id}" class="btn btn-sm btn-secondary"><span class="material-symbols-rounded">open_in_new</span></a>
-              </div>
-            </td>
-          </tr>`).join('')}</tbody>
+          <tbody>${cts.length ? cts.map(ct => renderVMRow(ct)).join('') : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessun container su questo nodo</td></tr>'}</tbody>
         </table>
       </div>
     </div>`;
 }
 
-function vmAction(action, id) {
-  const labels = {start:'avviata',stop:'fermata',reboot:'riavviata',shutdown:'spenta'};
-  const vm = MOCK_DATA.vms.find(v=>v.id===id);
-  if (!vm) return;
-  showToast(`VM ${vm.name} ${labels[action] || action}`, action==='stop'?'warning':'success');
+function renderVMRow(vm) {
+  return `<tr>
+    <td class="mono">${vm.id}</td>
+    <td><a href="vm-detail.html?id=${vm.id}" style="color:var(--text);font-weight:600">${escapeHtml(vm.name)}</a></td>
+    <td><span class="chip ${vm.status === 'running' ? 'chip-running' : 'chip-stopped'}">${vm.status}</span></td>
+    <td><span style="color:${barColor(vm.cpu)}">${vm.cpu}%</span></td>
+    <td><span style="color:${barColor(vm.mem)}">${vm.mem}%</span></td>
+    <td>${vm.disk} GB</td>
+    <td>
+      <div class="flex gap-8">
+        ${can(session,'start') && vm.status !== 'running' ? `<button class="btn btn-sm btn-success" onclick="vmAction('start','${vm.kind}','${vm.node}',${vm.id})"><span class="material-symbols-rounded">play_arrow</span></button>` : ''}
+        ${can(session,'stop')  && vm.status === 'running' ? `<button class="btn btn-sm btn-danger"  onclick="vmAction('stop','${vm.kind}','${vm.node}',${vm.id})"><span class="material-symbols-rounded">stop</span></button>` : ''}
+        <a href="vm-detail.html?id=${vm.id}" class="btn btn-sm btn-secondary"><span class="material-symbols-rounded">open_in_new</span></a>
+      </div>
+    </td>
+  </tr>`;
 }
 
-renderNodeSelector();
-renderNode();
+async function vmAction(action, kind, node, vmid) {
+  const credId = getActiveCred();
+  const labels = { start: 'avviata', stop: 'fermata', reboot: 'riavviata', shutdown: 'spenta' };
+  try {
+    await vmsApi[action](credId, kind, node, vmid);
+    showToast(`VM ${vmid} ${labels[action] || action}`, action === 'stop' ? 'warning' : 'success');
+    await refreshClusterData();
+    DATA = CLUSTER_DATA;
+    renderNode();
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+init();
 </script>
 </body>
 </html>

@@ -4,10 +4,6 @@ Background migration runner.
 A migration in Proxmox is an asynchronous PVE task identified by a UPID.
 We kick it off, then poll its status/log endpoints from a FastAPI BackgroundTask
 to update progress in the DB, which the UI fetches via /api/tasks.
-
-Progress is derived from the task log: PVE prints lines like
-  `progress 37% ...`
-and we parse the highest percentage seen. Not perfect but good enough for UX.
 """
 
 from __future__ import annotations

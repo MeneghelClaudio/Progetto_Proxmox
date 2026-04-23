@@ -14,6 +14,14 @@ from .models import User
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 
+# Role hierarchy — higher value = more privileges
+ROLE_LEVEL = {"junior": 1, "senior": 2, "admin": 3}
+
+
+def has_role(user: User, required: str) -> bool:
+    return ROLE_LEVEL.get(user.role, 0) >= ROLE_LEVEL.get(required, 99)
+
+
 def create_access_token(sub: str, extra: dict | None = None) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -44,12 +52,21 @@ def get_current_user(
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="User disabled")
     return user
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role != "admin" and not user.is_admin:
+    if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+def require_senior(user: User = Depends(get_current_user)) -> User:
+    """Senior or admin."""
+    if not has_role(user, "senior"):
+        raise HTTPException(status_code=403, detail="Senior or admin privileges required")
     return user
 
 
@@ -59,4 +76,7 @@ def ws_user_from_token(token: str, db: Session) -> Optional[User]:
         payload = decode_token(token)
     except HTTPException:
         return None
-    return db.query(User).filter(User.username == payload.get("sub")).first()
+    user = db.query(User).filter(User.username == payload.get("sub")).first()
+    if user and not user.is_active:
+        return None
+    return user

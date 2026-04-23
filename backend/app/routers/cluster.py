@@ -1,10 +1,5 @@
 """
 Cluster + nodes endpoints.
-
-- /api/clusters/{cred_id}/tree           → aggregated tree payload for the sidebar
-- /api/clusters/{cred_id}/status         → cluster health
-- /api/clusters/{cred_id}/nodes          → list of physical nodes
-- /api/clusters/{cred_id}/nodes/{node}   → live node status + RRD history
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -34,21 +29,15 @@ def _get_cred(db: Session, user: User, cred_id: int) -> ProxmoxCredential:
 
 @router.get("/{cred_id}/tree")
 def get_tree(cred_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """
-    Returns the full sidebar tree:
-      {
-        "cluster": {"name": ..., "quorate": ...},
-        "nodes":   [{node, status, cpu, maxcpu, mem, maxmem, type: 'node',
-                     vms: [...], cts: [...]}, ...],
-        "storages": [...],
-        "backup_targets": [...]
-      }
-    """
+    """Returns the full sidebar tree."""
     cred = _get_cred(db, user, cred_id)
     px = build_client(cred)
 
-    resources = cluster_resources(px)
-    status = cluster_status(px)
+    try:
+        resources = cluster_resources(px)
+        status = cluster_status(px)
+    except Exception as e:
+        raise HTTPException(502, f"Proxmox API error: {e}")
 
     cluster_info = next((s for s in status if s.get("type") == "cluster"), None)
     node_entries = [s for s in status if s.get("type") == "node"]

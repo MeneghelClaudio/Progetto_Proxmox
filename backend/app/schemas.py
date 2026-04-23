@@ -1,6 +1,9 @@
 from datetime import datetime
-from typing import Optional
-from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from pydantic import BaseModel, Field, EmailStr
+
+
+Role = Literal["admin", "senior", "junior"]
 
 
 # ---------- Auth ----------
@@ -14,22 +17,38 @@ class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
     username: str
-    role: str
+    full_name: str
+    email: str
+    role: Role
     is_admin: bool
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=6)
-    role: str = "junior"
-    is_admin: bool = False
+    full_name: str = ""
+    email: str = ""
+    role: Role = "junior"
+
+
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=6)
+    role: Optional[Role] = None
+    is_active: Optional[bool] = None
 
 
 class UserOut(BaseModel):
     id: int
     username: str
-    role: str
-    is_admin: bool
+    full_name: str
+    email: str
+    role: Role
+    is_active: bool
+    created_at: datetime
+    last_login: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
@@ -55,6 +74,7 @@ class CredentialOut(BaseModel):
     pve_realm: str
     verify_ssl: bool
     created_at: datetime
+
     class Config:
         from_attributes = True
 
@@ -104,6 +124,7 @@ class MigrationTaskOut(BaseModel):
     message: Optional[str]
     created_at: datetime
     updated_at: datetime
+
     class Config:
         from_attributes = True
 

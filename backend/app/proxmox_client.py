@@ -4,10 +4,6 @@ Proxmox API wrapper.
 Builds a `proxmoxer.ProxmoxAPI` client from a stored credential, correctly
 handling self-signed certificates. Exposes a thin collection of helpers used
 by the routers (cluster resources, node stats, vm actions, migrations...).
-
-Each call instantiates a fresh client; proxmoxer uses PVE ticket auth which
-is cheap and keeps things stateless across workers. For heavier deployments
-cache the client per (cred_id, worker) - left as an exercise.
 """
 
 from __future__ import annotations

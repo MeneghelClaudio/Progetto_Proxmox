@@ -6,7 +6,7 @@
 <title>Backup & Snapshot — ProxMox Manager</title>
 <link rel="stylesheet" href="shared.css"/>
 <style>
-.backup-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px; }
+.backup-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; margin-bottom:24px; }
 .pbs-detail-card {
   background:var(--surface); border:1px solid var(--border);
   border-radius:var(--radius-lg); padding:20px;
@@ -18,20 +18,11 @@
   border:1px solid var(--border);
   display:flex; align-items:center; justify-content:center;
   flex-direction:column; gap:2px;
-  cursor:default; transition:border-color .12s;
 }
 .disk-icon.used   { background:var(--accent-dim); border-color:var(--accent); }
 .disk-icon.free   { background:var(--surface2); }
 .disk-icon span   { font-size:12px; }
 
-/* Backup job table */
-.job-status-dot { width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:4px; }
-.job-ok   { background:var(--success); box-shadow:0 0 4px var(--success); }
-.job-warn { background:var(--warning); }
-.job-fail { background:var(--danger); box-shadow:0 0 4px var(--danger); }
-
-/* Snapshot timeline */
-.snap-timeline { display:flex; flex-direction:column; gap:0; }
 .snap-row {
   display:flex; align-items:flex-start; gap:14px;
   padding:12px 0; border-bottom:1px solid var(--border);
@@ -46,23 +37,12 @@
 .snap-desc-text { font-size:12px; color:var(--text-muted); margin-top:4px; }
 .snap-actions { display:flex; gap:6px; margin-top:8px; }
 
-.scope-pills { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:16px; }
-.scope-pill {
-  padding:5px 12px; border-radius:20px; font-size:12.5px; font-weight:600;
-  border:1px solid var(--border); cursor:pointer; transition:all .15s;
-  color:var(--text-muted);
+.empty-state {
+  background:var(--surface); border:1px dashed var(--border);
+  border-radius:var(--radius-lg); padding:48px;
+  text-align:center; color:var(--text-muted);
 }
-.scope-pill:hover { border-color:var(--border2); color:var(--text); }
-.scope-pill.active { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
-
-.progress-bar-anim {
-  height:4px; border-radius:2px; background:var(--surface3); overflow:hidden; margin-top:8px;
-}
-.progress-bar-fill-anim {
-  height:100%; border-radius:2px; background:var(--accent);
-  animation:progressAnim 2.5s ease-in-out infinite alternate;
-}
-@keyframes progressAnim { from{width:10%} to{width:90%} }
+.empty-state .material-symbols-rounded { font-size:48px; color:var(--text-dim); margin-bottom:12px; }
 </style>
 </head>
 <body>
@@ -73,68 +53,56 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">Backup &amp; Snapshot</h1>
-        <p class="page-subtitle">Gestione backup manuali, schedulati e snapshot</p>
+        <p class="page-subtitle">Gestione backup manuali e snapshot di tutte le VM/CT</p>
       </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" onclick="openModal('modal-backup')">
-          <span class="material-symbols-rounded">backup</span> Avvia backup manuale
-        </button>
-        <button class="btn btn-primary" onclick="openModal('modal-snapshot')">
-          <span class="material-symbols-rounded">camera</span> Nuovo snapshot
-        </button>
-      </div>
+      <div class="page-actions" id="page-actions"></div>
     </div>
 
-    <!-- PBS overview -->
+    <!-- Backup targets overview -->
     <div style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px">
       <span class="material-symbols-rounded" style="font-size:18px;color:var(--warning)">backup</span>
-      Proxmox Backup Server
+      Storage di Backup
     </div>
     <div class="backup-grid" id="pbs-grid"></div>
 
     <!-- Tabs -->
     <div class="tabs">
-      <div class="tab active" data-tab="jobs"      onclick="switchTab('jobs')">
-        <span class="material-symbols-rounded">schedule</span> Job Schedulati
+      <div class="tab active" data-tab="snapshots" onclick="switchTab('snapshots')">
+        <span class="material-symbols-rounded">camera</span> Snapshot per VM
       </div>
-      <div class="tab" data-tab="snapshots"  onclick="switchTab('snapshots')">
-        <span class="material-symbols-rounded">camera</span> Snapshot
-      </div>
-      <div class="tab" data-tab="restore"    onclick="switchTab('restore')">
-        <span class="material-symbols-rounded">restore</span> Ripristino
+      <div class="tab" data-tab="backups" onclick="switchTab('backups')">
+        <span class="material-symbols-rounded">archive</span> Backup disponibili
       </div>
     </div>
     <div id="tab-content"></div>
 
-    <!-- Modal: backup manuale -->
+    <!-- Modal: manual backup -->
     <div class="modal-overlay hidden" id="modal-backup">
       <div class="modal">
         <div class="modal-title"><span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">backup</span>Backup manuale</div>
-        <div class="modal-sub">Seleziona l'ambito del backup.</div>
         <div class="form-group">
-          <label class="form-label">Ambito</label>
-          <select class="form-input" id="backup-scope">
-            <option value="cluster">Intero cluster</option>
-            <option value="node">Singolo nodo</option>
-            <option value="vm">VM/Container singolo</option>
-          </select>
-        </div>
-        <div class="form-group" id="backup-node-group">
-          <label class="form-label">Nodo</label>
-          <select class="form-input" id="backup-node">
-            ${MOCK_DATA?.nodes?.map(n=>`<option value="${n.id}">${n.name}</option>`).join('')||''}
-          </select>
-        </div>
-        <div class="form-group" id="backup-vm-group" style="display:none">
           <label class="form-label">VM / Container</label>
-          <select class="form-input" id="backup-vm">
-            ${MOCK_DATA?.vms?.map(v=>`<option value="${v.id}">${v.name} (${v.id})</option>`).join('')||''}
+          <select class="form-input" id="backup-vm"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Storage destinazione</label>
+          <select class="form-input" id="backup-storage"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Modalità</label>
+          <select class="form-input" id="backup-mode">
+            <option value="snapshot">Snapshot (live)</option>
+            <option value="suspend">Suspend</option>
+            <option value="stop">Stop</option>
           </select>
         </div>
         <div class="form-group">
-          <label class="form-label">Destination PBS</label>
-          <select class="form-input" id="backup-pbs">
-            ${MOCK_DATA?.backupServers?.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')||''}
+          <label class="form-label">Compressione</label>
+          <select class="form-input" id="backup-compress">
+            <option value="zstd">zstd (consigliato)</option>
+            <option value="lzo">lzo</option>
+            <option value="gzip">gzip</option>
+            <option value="0">nessuna</option>
           </select>
         </div>
         <div class="modal-footer">
@@ -152,9 +120,7 @@
         <div class="modal-title"><span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">camera</span>Nuovo Snapshot</div>
         <div class="form-group">
           <label class="form-label">VM / Container</label>
-          <select class="form-input" id="snap-vm">
-            ${MOCK_DATA?.vms?.map(v=>`<option value="${v.id}">${v.name} (${v.id})</option>`).join('')||''}
-          </select>
+          <select class="form-input" id="snap-vm"></select>
         </div>
         <div class="form-group">
           <label class="form-label">Nome snapshot</label>
@@ -175,32 +141,73 @@
   </main>
 </div>
 
+<script src="api.js"></script>
 <script src="shared.js"></script>
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-buildSidebar('backup');
+let DATA = null;
+let BACKUP_TARGETS = [];   // from tree.backup_targets
+let ALL_SNAPS = [];        // [{vm, kind, node, snap}]
 
-// PBS cards
+async function init() {
+  await buildSidebar('backup');
+  const credId = await ensureActiveCred();
+  if (!credId) {
+    document.getElementById('tab-content').innerHTML = '<div class="card"><p class="text-muted">Nessun server Proxmox configurato.</p></div>';
+    return;
+  }
+  DATA = await ensureClusterData();
+  BACKUP_TARGETS = CLUSTER_RAW?.backup_targets || [];
+
+  // Fill action buttons based on role
+  const pa = document.getElementById('page-actions');
+  let html = '';
+  if (can(session, 'start') /* senior+ */ ) {
+    html += `<button class="btn btn-secondary" onclick="openBackupModal()">
+      <span class="material-symbols-rounded">backup</span> Backup manuale
+    </button>`;
+  }
+  if (can(session, 'snapshot_create')) {
+    html += `<button class="btn btn-primary" onclick="openSnapshotModal()">
+      <span class="material-symbols-rounded">camera</span> Nuovo snapshot
+    </button>`;
+  }
+  pa.innerHTML = html;
+
+  renderPBS();
+  switchTab('snapshots');
+  await loadAllSnapshots();
+}
+
+function barColor(p) { return p > 80 ? 'var(--danger)' : p > 60 ? 'var(--warning)' : 'var(--success)'; }
+
 function renderPBS() {
-  document.getElementById('pbs-grid').innerHTML = MOCK_DATA.backupServers.map(bs => {
-    const pct   = Math.round(bs.diskUsed/bs.diskTotal*100);
-    const total = (bs.diskTotal/1024).toFixed(0);
-    const used  = (bs.diskUsed/1024).toFixed(1);
-    const free  = ((bs.diskTotal-bs.diskUsed)/1024).toFixed(1);
-    const diskCount = 10;
-    const usedDisks = Math.round(pct/100*diskCount);
-    const col = pct>80?'var(--danger)':pct>60?'var(--warning)':'var(--success)';
-    const disks = Array.from({length:diskCount},(_,i)=>`
-      <div class="disk-icon ${i<usedDisks?'used':'free'}">
-        <span class="material-symbols-rounded" style="font-size:14px;color:${i<usedDisks?'var(--accent)':'var(--text-dim)'}">hard_drive</span>
-        <span style="font-size:8px;color:${i<usedDisks?'var(--accent)':'var(--text-dim)'}">${i<usedDisks?'IN USE':'FREE'}</span>
+  const el = document.getElementById('pbs-grid');
+  if (!BACKUP_TARGETS.length) {
+    el.innerHTML = `<div class="empty-state"><span class="material-symbols-rounded">backup</span><div>Nessun storage di backup configurato sui nodi.</div></div>`;
+    return;
+  }
+  el.innerHTML = BACKUP_TARGETS.map(bt => {
+    const used = bt.used || 0;
+    const total = bt.total || 1;
+    const pct = Math.round(used / total * 100);
+    const col = barColor(pct);
+    const usedGB = Math.round(used / (1024 ** 3));
+    const totalGB = Math.round(total / (1024 ** 3));
+    const freeGB = Math.max(0, totalGB - usedGB);
+    const diskCount = 8;
+    const usedDisks = Math.round(pct / 100 * diskCount);
+    const disks = Array.from({ length: diskCount }, (_, i) => `
+      <div class="disk-icon ${i < usedDisks ? 'used' : 'free'}">
+        <span class="material-symbols-rounded" style="font-size:14px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">hard_drive</span>
+        <span style="font-size:8px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">${i < usedDisks ? 'IN USE' : 'FREE'}</span>
       </div>`).join('');
     return `<div class="pbs-detail-card">
       <div class="pbs-title">
         <span class="material-symbols-rounded" style="color:var(--warning)">backup</span>
-        ${bs.name}
-        <span class="chip chip-running" style="margin-left:auto">${bs.status}</span>
+        ${escapeHtml(bt.storage)}
+        <span class="chip chip-running" style="margin-left:auto">${escapeHtml(bt.node)}</span>
       </div>
       <div class="disk-row">${disks}</div>
       <div class="flex items-center justify-between mb-8">
@@ -209,159 +216,207 @@ function renderPBS() {
       </div>
       <div class="stat-bar"><div class="stat-bar-fill" style="width:${pct}%;background:${col}"></div></div>
       <div class="flex items-center justify-between mt-8">
-        <span class="text-xs text-muted">Usato: <b>${used} GB</b></span>
-        <span class="text-xs text-muted">Libero: <b>${free} GB</b></span>
-        <span class="text-xs text-muted">Totale: <b>${total} GB</b></span>
+        <span class="text-xs text-muted">Usato: <b>${usedGB} GB</b></span>
+        <span class="text-xs text-muted">Libero: <b>${freeGB} GB</b></span>
+        <span class="text-xs text-muted">Totale: <b>${totalGB} GB</b></span>
       </div>
     </div>`;
   }).join('');
 }
 
-// Mock backup jobs
-const backupJobs = [
-  { id:'job1', scope:'Cluster prod-cluster', schedule:'Ogni notte 02:00', lastRun:'2024-05-13 02:00', status:'ok',   duration:'14m 22s', pbs:'pbs-main' },
-  { id:'job2', scope:'pve1 — tutte le VM',   schedule:'Ogni 6h',          lastRun:'2024-05-13 18:00', status:'ok',   duration:'8m 05s',  pbs:'pbs-main' },
-  { id:'job3', scope:'mail-server (103)',     schedule:'Ogni domenica',    lastRun:'2024-05-12 03:00', status:'warn', duration:'22m 11s', pbs:'pbs-dr'   },
-  { id:'job4', scope:'pve3 — tutte le VM',   schedule:'Ogni notte 03:30', lastRun:'2024-05-11 03:30', status:'fail', duration:'-',        pbs:'pbs-dr'   },
-];
-
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
-  const el = document.getElementById('tab-content');
-  if (tab==='jobs')      el.innerHTML = renderJobs();
-  if (tab==='snapshots') el.innerHTML = renderSnapshots();
-  if (tab==='restore')   el.innerHTML = renderRestore();
+async function loadAllSnapshots() {
+  ALL_SNAPS = [];
+  const credId = getActiveCred();
+  for (const vm of DATA.vms) {
+    try {
+      const snaps = await snapApi.list(credId, vm.kind, vm.node, vm.id);
+      snaps.filter(s => s.name !== 'current').forEach(s => {
+        ALL_SNAPS.push({ vm, snap: s });
+      });
+    } catch { /* ignore */ }
+  }
+  if (document.querySelector('.tab[data-tab="snapshots"].active')) {
+    document.getElementById('tab-content').innerHTML = renderSnapshots();
+  }
 }
 
-function renderJobs() {
-  return `<div class="card">
-    <div class="card-header justify-between">
-      <div class="flex items-center gap-8">
-        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">schedule</span>
-        <span class="card-title">Job di backup schedulati</span>
-      </div>
-    </div>
-    <div class="table-wrap"><table>
-      <thead><tr><th>Ambito</th><th>Schedule</th><th>Ultima esecuzione</th><th>Durata</th><th>PBS</th><th>Stato</th><th></th></tr></thead>
-      <tbody>${backupJobs.map(j=>`<tr>
-        <td style="font-weight:600">${j.scope}</td>
-        <td class="text-muted">${j.schedule}</td>
-        <td class="mono text-sm">${j.lastRun}</td>
-        <td class="mono text-sm">${j.duration}</td>
-        <td class="text-muted">${j.pbs}</td>
-        <td><span class="job-status-dot job-${j.status}"></span>
-          <span style="font-size:12px;color:${j.status==='ok'?'var(--success)':j.status==='warn'?'var(--warning)':'var(--danger)'}">
-            ${j.status==='ok'?'Completato':j.status==='warn'?'Avvisi':'Fallito'}
-          </span>
-        </td>
-        <td><button class="btn btn-sm btn-secondary" onclick="showToast('Backup avviato manualmente','info')">
-          <span class="material-symbols-rounded">play_arrow</span>
-        </button></td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-  </div>`;
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  const el = document.getElementById('tab-content');
+  if (tab === 'snapshots') el.innerHTML = renderSnapshots();
+  if (tab === 'backups')   el.innerHTML = renderBackupsList();
 }
 
 function renderSnapshots() {
-  // All snapshots flat
-  const allSnaps = [];
-  Object.entries(MOCK_DATA.snapshots).forEach(([vmId, snaps])=>{
-    const vm = MOCK_DATA.vms.find(v=>v.id===parseInt(vmId));
-    snaps.forEach(s => allSnaps.push({...s, vmName: vm?.name||vmId, vmId}));
-  });
-  allSnaps.sort((a,b)=>b.date.localeCompare(a.date));
-
-  return `<div class="card">
-    <div class="card-header justify-between mb-16">
-      <div class="flex items-center gap-8">
-        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">camera</span>
-        <span class="card-title">Tutti gli snapshot (${allSnaps.length})</span>
-      </div>
-    </div>
-    <div class="snap-timeline">${allSnaps.map((s,i)=>`
-      <div class="snap-row">
-        <div class="snap-dot-col">
-          <div class="snap-dot"></div>
-          ${i<allSnaps.length-1 ? '<div class="snap-line"></div>' : ''}
-        </div>
-        <div class="snap-content">
-          <div class="snap-name">${s.name}</div>
-          <div class="snap-meta">${s.date} &nbsp;·&nbsp; VM: ${s.vmName}</div>
-          <div class="snap-desc-text">${s.desc}</div>
-          ${can(session,'start') ? `<div class="snap-actions">
-            <button class="btn btn-sm btn-success" onclick="showToast('Ripristino snapshot avviato','info')">
-              <span class="material-symbols-rounded">restore</span> Ripristina
-            </button>
-            <button class="btn btn-sm btn-danger" onclick="showToast('Snapshot eliminato','warning')">
-              <span class="material-symbols-rounded">delete</span>
-            </button>
-          </div>` : ''}
-        </div>
-      </div>`).join('')}</div>
-  </div>`;
-}
-
-function renderRestore() {
+  const sorted = [...ALL_SNAPS].sort((a, b) => (b.snap.snaptime || 0) - (a.snap.snaptime || 0));
+  if (!sorted.length) {
+    return `<div class="empty-state"><span class="material-symbols-rounded">camera</span><h3>Nessuno snapshot</h3><p>Crea uno snapshot dal menu o dalla pagina di una VM.</p></div>`;
+  }
   return `<div class="card">
     <div class="card-header">
-      <span class="material-symbols-rounded" style="font-size:18px;color:var(--success)">restore</span>
-      <span class="card-title">Ripristino da backup PBS</span>
+      <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">camera</span>
+      <span class="card-title">Tutti gli snapshot (${sorted.length})</span>
     </div>
-    <div class="form-group">
-      <label class="form-label">Backup Server</label>
-      <select class="form-input" style="max-width:320px">
-        ${MOCK_DATA.backupServers.map(b=>`<option>${b.name}</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label">VM / Container da ripristinare</label>
-      <select class="form-input" style="max-width:320px">
-        ${MOCK_DATA.vms.map(v=>`<option>${v.name} (${v.id})</option>`).join('')}
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Nodo di destinazione</label>
-      <select class="form-input" style="max-width:320px">
-        ${MOCK_DATA.nodes.map(n=>`<option>${n.name}</option>`).join('')}
-      </select>
-    </div>
-    <button class="btn btn-primary" onclick="showToast('Ripristino avviato (simulato)','success')">
-      <span class="material-symbols-rounded">restore</span> Avvia ripristino
-    </button>
+    ${sorted.map((item, i) => {
+      const date = item.snap.snaptime ? new Date(item.snap.snaptime * 1000).toISOString().slice(0, 16).replace('T', ' ') : '';
+      return `<div class="snap-row">
+        <div class="snap-dot-col">
+          <div class="snap-dot"></div>
+          ${i < sorted.length - 1 ? '<div class="snap-line"></div>' : ''}
+        </div>
+        <div class="snap-content">
+          <div class="snap-name">${escapeHtml(item.snap.name)}</div>
+          <div class="snap-meta">${date} &nbsp;·&nbsp; VM: ${escapeHtml(item.vm.name)} (${item.vm.id}) &nbsp;·&nbsp; Nodo: ${escapeHtml(item.vm.node)}</div>
+          <div class="snap-desc-text">${escapeHtml(item.snap.description || '')}</div>
+          ${can(session, 'start') ? `<div class="snap-actions">
+            <button class="btn btn-sm btn-success" onclick="rollbackSnap(${item.vm.id},'${encodeURIComponent(item.snap.name)}')">
+              <span class="material-symbols-rounded">restore</span> Ripristina
+            </button>
+            ${can(session, 'snapshot_delete') ? `<button class="btn btn-sm btn-danger" onclick="deleteSnap(${item.vm.id},'${encodeURIComponent(item.snap.name)}')">
+              <span class="material-symbols-rounded">delete</span>
+            </button>` : ''}
+          </div>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
   </div>`;
 }
 
-// Scope selector in modal
-document.addEventListener('DOMContentLoaded', ()=>{
-  const scope = document.getElementById('backup-scope');
-  if(!scope) return;
-  scope.addEventListener('change', ()=>{
-    document.getElementById('backup-node-group').style.display = scope.value==='vm'?'none':'block';
-    document.getElementById('backup-vm-group').style.display   = scope.value==='vm'?'block':'none';
-  });
-});
-
-function startBackup() {
-  closeModal('modal-backup');
-  showToast('Backup avviato con successo', 'success');
+function renderBackupsList() {
+  if (!BACKUP_TARGETS.length) {
+    return `<div class="empty-state"><span class="material-symbols-rounded">archive</span><h3>Nessuno storage di backup</h3></div>`;
+  }
+  return `<div class="card">
+    <div class="card-header">
+      <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">archive</span>
+      <span class="card-title">Backup disponibili per storage</span>
+    </div>
+    <div id="backups-per-storage">
+      ${BACKUP_TARGETS.map(bt => `
+        <div style="margin-bottom:16px">
+          <h4 style="font-size:13px;font-weight:700;margin-bottom:8px">${escapeHtml(bt.node)} / ${escapeHtml(bt.storage)}</h4>
+          <div id="bk-${escapeHtml(bt.node)}-${escapeHtml(bt.storage)}" class="text-muted text-sm">Caricamento...</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
 }
-function createSnapshot() {
+
+async function loadBackupsForEachStorage() {
+  const credId = getActiveCred();
+  for (const bt of BACKUP_TARGETS) {
+    const id = `bk-${bt.node}-${bt.storage}`.replace(/[^a-zA-Z0-9-]/g, '_');
+    const el = document.getElementById(id);
+    if (!el) continue;
+    try {
+      const items = await backupApi.list(credId, bt.node, bt.storage);
+      if (!items.length) { el.innerHTML = '<span class="text-muted">Nessun backup.</span>'; continue; }
+      el.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>Volume</th><th>VMID</th><th>Data</th><th>Dimensione</th></tr></thead>
+        <tbody>${items.map(b => `<tr>
+          <td class="mono text-sm">${escapeHtml(b.volid || '')}</td>
+          <td class="mono">${b.vmid || ''}</td>
+          <td class="mono text-sm">${b.ctime ? new Date(b.ctime * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''}</td>
+          <td>${b.size ? (Math.round(b.size / (1024 ** 2)) + ' MB') : ''}</td>
+        </tr>`).join('')}</tbody></table></div>`;
+    } catch (e) {
+      el.innerHTML = `<span class="text-danger">${escapeHtml(e.message)}</span>`;
+    }
+  }
+}
+
+// --- Modals ---
+
+function openBackupModal() {
+  const vmSel = document.getElementById('backup-vm');
+  vmSel.innerHTML = DATA.vms.map(v => `<option value="${v.id}">${escapeHtml(v.name)} (${v.id}) - ${escapeHtml(v.node)}</option>`).join('');
+  const storSel = document.getElementById('backup-storage');
+  storSel.innerHTML = BACKUP_TARGETS.map(bt => `<option value="${bt.node}|${bt.storage}">${escapeHtml(bt.storage)} (${escapeHtml(bt.node)})</option>`).join('');
+  if (!BACKUP_TARGETS.length) {
+    showToast('Nessuno storage di backup disponibile', 'warning');
+    return;
+  }
+  openModal('modal-backup');
+}
+
+function openSnapshotModal() {
+  const vmSel = document.getElementById('snap-vm');
+  vmSel.innerHTML = DATA.vms.map(v => `<option value="${v.id}">${escapeHtml(v.name)} (${v.id}) - ${escapeHtml(v.node)}</option>`).join('');
+  document.getElementById('snap-name').value = '';
+  document.getElementById('snap-desc').value = '';
+  openModal('modal-snapshot');
+}
+
+async function startBackup() {
+  const vmId = parseInt(document.getElementById('backup-vm').value);
+  const vm = DATA.vms.find(v => v.id === vmId);
+  if (!vm) return;
+  const storageSel = document.getElementById('backup-storage').value.split('|');
+  const node = storageSel[0];
+  const storage = storageSel[1];
+  const mode = document.getElementById('backup-mode').value;
+  const compress = document.getElementById('backup-compress').value;
+  try {
+    await backupApi.create(getActiveCred(), node, vm.id, {
+      storage, mode, compress, notes: null,
+    });
+    closeModal('modal-backup');
+    showToast('Backup avviato', 'success');
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+async function createSnapshot() {
   const vmId = parseInt(document.getElementById('snap-vm').value);
+  const vm = DATA.vms.find(v => v.id === vmId);
+  if (!vm) return;
   const name = document.getElementById('snap-name').value || 'snapshot';
   const desc = document.getElementById('snap-desc').value;
-  if (!MOCK_DATA.snapshots[vmId]) MOCK_DATA.snapshots[vmId] = [];
-  const now = new Date().toISOString().slice(0,16).replace('T',' ');
-  MOCK_DATA.snapshots[vmId].unshift({id:'s'+Date.now(), name, date:now, desc});
-  closeModal('modal-snapshot');
-  if (document.querySelector('.tab[data-tab="snapshots"].active')) switchTab('snapshots');
-  showToast(`Snapshot "${name}" creato`, 'success');
+  try {
+    await snapApi.create(getActiveCred(), vm.kind, vm.node, vm.id, {
+      snapname: name, description: desc,
+    });
+    closeModal('modal-snapshot');
+    showToast(`Snapshot "${name}" creato`, 'success');
+    await loadAllSnapshots();
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+async function rollbackSnap(vmId, nameEnc) {
+  const vm = DATA.vms.find(v => v.id === vmId);
+  if (!vm) return;
+  const name = decodeURIComponent(nameEnc);
+  if (!confirm(`Ripristinare "${name}" su ${vm.name}?`)) return;
+  try {
+    await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, name);
+    showToast('Rollback avviato', 'info');
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+}
+
+async function deleteSnap(vmId, nameEnc) {
+  const vm = DATA.vms.find(v => v.id === vmId);
+  if (!vm) return;
+  const name = decodeURIComponent(nameEnc);
+  if (!confirm(`Eliminare lo snapshot "${name}"?`)) return;
+  try {
+    await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, name);
+    showToast('Snapshot eliminato', 'warning');
+    await loadAllSnapshots();
+  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-renderPBS();
-switchTab('jobs');
+init();
+
+// When user clicks "Backup disponibili" tab, lazy-load actual backups
+document.addEventListener('click', (e) => {
+  const tab = e.target.closest('.tab[data-tab="backups"]');
+  if (tab) setTimeout(loadBackupsForEachStorage, 50);
+});
 </script>
 </body>
 </html>

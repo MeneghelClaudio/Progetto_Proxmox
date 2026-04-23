@@ -1,17 +1,19 @@
 """
 VM / CT management endpoints. `kind` is always 'qemu' or 'lxc'.
 
-Safety:
-- DELETE and CLONE-into-existing-vmid require a confirmation payload with the
-  current VM/CT name (GitHub-repo-style double confirm).
-- MIGRATE is fire-and-forget: returns a migration task id, the UI polls /api/tasks.
+Role gates:
+- read:    any authenticated user
+- power (start/stop/shutdown/reboot): senior+
+- clone:   senior+
+- migrate: senior+
+- delete:  admin only
 """
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..auth import get_current_user
+from ..auth import get_current_user, require_senior, require_admin
 from ..models import User, ProxmoxCredential
 from ..schemas import CloneIn, MigrateIn, DeleteConfirmIn, MigrationTaskOut
 from ..proxmox_client import (
@@ -60,7 +62,7 @@ def rrd(cred_id: int, kind: str, node: str, vmid: int, timeframe: str = "hour",
     return vm_rrddata(build_client(cred), node, vmid, _kind(kind), timeframe=timeframe)
 
 
-# ---------- Power ----------
+# ---------- Power (senior+) ----------
 
 def _action(fn, cred, node, vmid, kind):
     return {"upid": fn(build_client(cred), node, vmid, _kind(kind))}
@@ -68,33 +70,33 @@ def _action(fn, cred, node, vmid, kind):
 
 @router.post("/{kind}/{node}/{vmid}/start")
 def start(cred_id: int, kind: str, node: str, vmid: int,
-          db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+          db: Session = Depends(get_db), user: User = Depends(require_senior)):
     return _action(vm_start, _get_cred(db, user, cred_id), node, vmid, kind)
 
 
 @router.post("/{kind}/{node}/{vmid}/stop")
 def stop(cred_id: int, kind: str, node: str, vmid: int,
-         db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+         db: Session = Depends(get_db), user: User = Depends(require_senior)):
     return _action(vm_stop, _get_cred(db, user, cred_id), node, vmid, kind)
 
 
 @router.post("/{kind}/{node}/{vmid}/shutdown")
 def shutdown(cred_id: int, kind: str, node: str, vmid: int,
-             db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+             db: Session = Depends(get_db), user: User = Depends(require_senior)):
     return _action(vm_shutdown, _get_cred(db, user, cred_id), node, vmid, kind)
 
 
 @router.post("/{kind}/{node}/{vmid}/reboot")
 def reboot(cred_id: int, kind: str, node: str, vmid: int,
-           db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+           db: Session = Depends(get_db), user: User = Depends(require_senior)):
     return _action(vm_reboot, _get_cred(db, user, cred_id), node, vmid, kind)
 
 
-# ---------- Destructive with double confirmation ----------
+# ---------- Destructive (admin only) ----------
 
 @router.post("/{kind}/{node}/{vmid}/delete")
 def delete(cred_id: int, kind: str, node: str, vmid: int, body: DeleteConfirmIn,
-           db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+           db: Session = Depends(get_db), user: User = Depends(require_admin)):
     cred = _get_cred(db, user, cred_id)
     px = build_client(cred)
     current_info = vm_current(px, node, vmid, _kind(kind))
@@ -106,9 +108,11 @@ def delete(cred_id: int, kind: str, node: str, vmid: int, body: DeleteConfirmIn,
     return {"upid": vm_delete(px, node, vmid, _kind(kind))}
 
 
+# ---------- Clone (senior+) ----------
+
 @router.post("/{kind}/{node}/{vmid}/clone")
 def clone(cred_id: int, kind: str, node: str, vmid: int, body: CloneIn,
-          db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+          db: Session = Depends(get_db), user: User = Depends(require_senior)):
     cred = _get_cred(db, user, cred_id)
     return {"upid": vm_clone(
         build_client(cred), node, vmid, newid=body.newid, kind=_kind(kind),
@@ -116,12 +120,12 @@ def clone(cred_id: int, kind: str, node: str, vmid: int, body: CloneIn,
     )}
 
 
-# ---------- Migration (background-tracked) ----------
+# ---------- Migration (senior+) ----------
 
 @router.post("/{kind}/{node}/{vmid}/migrate", response_model=MigrationTaskOut)
 def migrate(cred_id: int, kind: str, node: str, vmid: int, body: MigrateIn,
             bg: BackgroundTasks,
-            db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+            db: Session = Depends(get_db), user: User = Depends(require_senior)):
     cred = _get_cred(db, user, cred_id)
     task = start_migration(
         user_id=user.id, cred=cred, node=node, vmid=vmid, kind=_kind(kind),

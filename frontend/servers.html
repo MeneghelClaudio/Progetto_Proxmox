@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Server Proxmox — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css"/>
+<style>
+.server-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:18px;
+  display:flex; align-items:center; gap:14px;
+  transition:border-color .15s;
+}
+.server-card:hover { border-color:var(--border2); }
+.server-card.active { border-color:var(--accent); }
+.server-icon {
+  width:42px; height:42px; border-radius:12px;
+  background:var(--accent-dim);
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}
+.server-icon .material-symbols-rounded { font-size:22px; color:var(--accent); }
+.server-info { flex:1; min-width:0; }
+.server-name { font-size:14px; font-weight:700; display:flex; align-items:center; gap:8px; }
+.server-host { font-size:12px; color:var(--text-muted); font-family:var(--mono); }
+.server-meta { font-size:11px; color:var(--text-dim); margin-top:2px; }
+
+.empty-state {
+  background:var(--surface); border:1px dashed var(--border);
+  border-radius:var(--radius-lg); padding:48px;
+  text-align:center; color:var(--text-muted);
+}
+.empty-state .material-symbols-rounded { font-size:48px; color:var(--text-dim); margin-bottom:12px; }
+.empty-state h3 { font-size:16px; font-weight:700; margin-bottom:8px; color:var(--text); }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Server Proxmox</h1>
+        <p class="page-subtitle">Credenziali dei cluster / host Proxmox registrati</p>
+      </div>
+      <div class="page-actions" id="page-actions"></div>
+    </div>
+
+    <div id="server-list"></div>
+
+    <!-- Modal: add server -->
+    <div class="modal-overlay hidden" id="modal-add-server">
+      <div class="modal" style="max-width:540px">
+        <div class="modal-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">dns</span>
+          Aggiungi server Proxmox
+        </div>
+        <div class="modal-sub">Le credenziali sono criptate (Fernet) prima di essere salvate nel database.</div>
+
+        <div class="form-group">
+          <label class="form-label">Nome amichevole</label>
+          <input type="text" class="form-input" id="srv-name" placeholder="es. prod-cluster" />
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Host / IP</label>
+            <input type="text" class="form-input" id="srv-host" placeholder="pve.azienda.local" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Porta</label>
+            <input type="number" class="form-input" id="srv-port" value="8006" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Utente PVE</label>
+            <input type="text" class="form-input" id="srv-user" value="root" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Realm</label>
+            <select class="form-input" id="srv-realm">
+              <option value="pam">pam</option>
+              <option value="pve">pve</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" class="form-input" id="srv-pass" placeholder="••••••••" />
+        </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="srv-ssl" />
+            Verifica certificato SSL (disabilita per self-signed)
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-server')">Annulla</button>
+          <button class="btn btn-primary" onclick="saveServer()">
+            <span class="material-symbols-rounded">save</span> Salva
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="api.js"></script>
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+let SERVERS = [];
+
+async function init() {
+  await buildSidebar('servers');
+  const pa = document.getElementById('page-actions');
+  if (can(session, 'add_server')) {
+    pa.innerHTML = `
+      <button class="btn btn-primary" onclick="openAddServer()">
+        <span class="material-symbols-rounded">add</span> Aggiungi server
+      </button>`;
+  }
+  await loadServers();
+}
+
+async function loadServers() {
+  try {
+    SERVERS = await credsApi.list();
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+    SERVERS = [];
+  }
+  renderServers();
+}
+
+function renderServers() {
+  const el = document.getElementById('server-list');
+  if (!SERVERS.length) {
+    el.innerHTML = `
+      <div class="empty-state">
+        <span class="material-symbols-rounded">dns</span>
+        <h3>Nessun server registrato</h3>
+        <p>Aggiungi le credenziali di un host o cluster Proxmox per iniziare.</p>
+        ${can(session, 'add_server') ? `<button class="btn btn-primary" style="margin-top:16px" onclick="openAddServer()">
+          <span class="material-symbols-rounded">add</span> Aggiungi il primo server
+        </button>` : ''}
+      </div>`;
+    return;
+  }
+
+  const activeId = getActiveCred();
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
+    ${SERVERS.map(s => `
+      <div class="server-card ${s.id === activeId ? 'active' : ''}">
+        <div class="server-icon"><span class="material-symbols-rounded">dns</span></div>
+        <div class="server-info">
+          <div class="server-name">
+            ${escapeHtml(s.name)}
+            ${s.id === activeId ? '<span class="chip chip-running">attivo</span>' : ''}
+          </div>
+          <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)} · ${escapeHtml(s.host)}:${s.port}</div>
+          <div class="server-meta">SSL: ${s.verify_ssl ? 'verifica abilitata' : 'self-signed'} · Creato: ${s.created_at ? s.created_at.slice(0, 10) : '-'}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          ${s.id !== activeId ? `<button class="btn btn-sm btn-primary" onclick="setActive(${s.id})">
+            <span class="material-symbols-rounded">check</span> Usa
+          </button>` : ''}
+          ${session.level === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="removeServer(${s.id},'${escapeHtml(s.name)}')">
+            <span class="material-symbols-rounded">delete</span>
+          </button>` : ''}
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function openAddServer() {
+  document.getElementById('srv-name').value = '';
+  document.getElementById('srv-host').value = '';
+  document.getElementById('srv-port').value = '8006';
+  document.getElementById('srv-user').value = 'root';
+  document.getElementById('srv-realm').value = 'pam';
+  document.getElementById('srv-pass').value = '';
+  document.getElementById('srv-ssl').checked = false;
+  openModal('modal-add-server');
+}
+
+async function saveServer() {
+  const payload = {
+    name:         document.getElementById('srv-name').value.trim(),
+    host:         document.getElementById('srv-host').value.trim(),
+    port:         parseInt(document.getElementById('srv-port').value) || 8006,
+    pve_username: document.getElementById('srv-user').value.trim(),
+    pve_realm:    document.getElementById('srv-realm').value,
+    password:     document.getElementById('srv-pass').value,
+    verify_ssl:   document.getElementById('srv-ssl').checked,
+  };
+  if (!payload.name || !payload.host || !payload.pve_username || !payload.password) {
+    showToast('Compila tutti i campi obbligatori', 'warning');
+    return;
+  }
+  try {
+    const s = await credsApi.create(payload);
+    showToast(`Server "${payload.name}" aggiunto`, 'success');
+    closeModal('modal-add-server');
+    // Make it active if no active credential yet
+    if (!getActiveCred()) setActiveCred(s.id);
+    await loadServers();
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+function setActive(id) {
+  setActiveCred(id);
+  showToast('Server attivo impostato', 'success');
+  renderServers();
+}
+
+async function removeServer(id, name) {
+  if (!confirm(`Rimuovere il server "${name}"? Tutti i task di migrazione associati verranno eliminati.`)) return;
+  try {
+    await credsApi.remove(id);
+    if (getActiveCred() === id) setActiveCred(null);
+    showToast(`Server "${name}" rimosso`, 'warning');
+    await loadServers();
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+init();
+</script>
+</body>
+</html>

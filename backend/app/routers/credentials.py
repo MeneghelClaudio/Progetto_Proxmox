@@ -23,6 +23,10 @@ def create_credential(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Only admin and senior can add Proxmox servers
+    if user.role not in ("admin", "senior"):
+        raise HTTPException(403, "Admin or senior required to add servers")
+
     cred = ProxmoxCredential(
         user_id=user.id,
         name=payload.name,
@@ -45,6 +49,8 @@ def create_credential(
 
 @router.delete("/{cred_id}", status_code=204)
 def delete_credential(cred_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(403, "Admin only")
     cred = db.query(ProxmoxCredential).filter(
         ProxmoxCredential.id == cred_id,
         ProxmoxCredential.user_id == user.id,

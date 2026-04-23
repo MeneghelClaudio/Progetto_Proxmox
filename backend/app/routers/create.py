@@ -1,19 +1,16 @@
 """
 Per-node resources + VM/CT creation.
 
-GET  /api/clusters/{cid}/nodes/{node}/resources
-    → returns everything a UI form needs: next free vmid, storages grouped
-      by content, iso list, CT templates, bridges, BIOS options, ostypes.
-
-POST /api/clusters/{cid}/nodes/{node}/qemu → create VM
-POST /api/clusters/{cid}/nodes/{node}/lxc  → create CT
+Role gates:
+- GET resources: any authenticated user (needed for any form)
+- POST qemu/lxc: senior+
 """
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..auth import get_current_user
+from ..auth import get_current_user, require_senior
 from ..models import User, ProxmoxCredential
 from ..schemas import CreateVMIn, CreateCTIn
 from ..proxmox_client import (
@@ -88,16 +85,15 @@ def get_resources(cred_id: int, node: str,
     }
 
 
-# ---------- Create VM ----------
+# ---------- Create VM (senior+) ----------
 
 @router.post("/qemu")
 def create_vm(cred_id: int, node: str, body: CreateVMIn,
               db: Session = Depends(get_db),
-              user: User = Depends(get_current_user)):
+              user: User = Depends(require_senior)):
     cred = _get_cred(db, user, cred_id)
     px = build_client(cred)
 
-    # Build Proxmox params
     net_parts = [f"model={body.net_model}", f"bridge={body.net_bridge}"]
     if body.net_vlan:
         net_parts.append(f"tag={body.net_vlan}")
@@ -129,19 +125,18 @@ def create_vm(cred_id: int, node: str, body: CreateVMIn,
         raise HTTPException(400, f"Create failed: {e}")
 
     if body.start_after_create:
-        # Best-effort start; ignore failures (disk may still be allocating)
         try: vm_start(px, node, body.vmid, "qemu")
         except Exception: pass
 
     return {"upid": upid, "vmid": body.vmid, "node": node}
 
 
-# ---------- Create CT ----------
+# ---------- Create CT (senior+) ----------
 
 @router.post("/lxc")
 def create_ct(cred_id: int, node: str, body: CreateCTIn,
               db: Session = Depends(get_db),
-              user: User = Depends(get_current_user)):
+              user: User = Depends(require_senior)):
     if not body.password and not body.ssh_public_keys:
         raise HTTPException(400, "Provide at least a password or an SSH public key")
 

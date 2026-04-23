@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<title>ProxMox Manager</title>
+<script>
+  // Redirect based on auth state
+  try {
+    const s = JSON.parse(localStorage.getItem('pmx_session'));
+    location.replace(s && s.token ? 'dashboard.html' : 'login.html');
+  } catch {
+    location.replace('login.html');
+  }
+</script>
+</head>
+<body></body>
+</html>

@@ -20,7 +20,6 @@
 .stat-card-lg .sc-lbl { font-size:12px; color:var(--text-muted); font-weight:500; }
 .stat-card-lg .sc-sub { font-size:11px; color:var(--text-dim); margin-top:2px; }
 
-/* Node cards */
 .node-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; }
 .node-card {
   background:var(--surface); border:1px solid var(--border);
@@ -28,10 +27,7 @@
   transition:border-color .15s;
 }
 .node-card:hover { border-color:var(--border2); }
-.node-card-header {
-  display:flex; align-items:center; gap:10px;
-  padding:16px 16px 12px;
-}
+.node-card-header { display:flex; align-items:center; gap:10px; padding:16px 16px 12px; }
 .node-card-header h3 { font-size:15px; font-weight:700; }
 .node-card-header .node-status { margin-left:auto; }
 .node-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:0 16px 16px; }
@@ -40,16 +36,9 @@
 .node-metric-val { font-size:18px; font-weight:700; font-family:var(--mono); }
 .node-metric-bar { height:3px; border-radius:2px; background:var(--surface3); overflow:hidden; }
 .node-metric-fill { height:100%; border-radius:2px; }
-.node-vms {
-  border-top:1px solid var(--border); padding:10px 16px;
-  display:flex; gap:6px; flex-wrap:wrap;
-}
+.node-vms { border-top:1px solid var(--border); padding:10px 16px; display:flex; gap:6px; flex-wrap:wrap; }
 
-/* Cluster grid */
-.cluster-card {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--radius-lg); padding:20px;
-}
+.cluster-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; }
 .cluster-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
 .cluster-header h3 { font-size:15px; font-weight:700; }
 .cluster-nodes { display:flex; gap:8px; flex-wrap:wrap; }
@@ -62,30 +51,23 @@
 }
 .cluster-node-pill:hover { border-color:var(--accent); color:var(--accent); }
 
-/* Backup server cards */
-.pbs-card {
-  background:var(--surface); border:1px solid var(--border);
-  border-radius:var(--radius-lg); padding:20px;
-}
+.pbs-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px; }
 .pbs-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
-.disk-rack {
-  display:grid; grid-template-columns:repeat(auto-fill,minmax(28px,1fr)); gap:4px;
-  margin-bottom:12px;
-}
+.disk-rack { display:grid; grid-template-columns:repeat(auto-fill,minmax(28px,1fr)); gap:4px; margin-bottom:12px; }
 .disk-unit {
-  height:36px; border-radius:4px;
-  border:1px solid var(--border);
-  display:flex; align-items:center; justify-content:center;
-  font-size:10px;
+  height:36px; border-radius:4px; border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center; font-size:10px;
 }
-.disk-unit.used   { background:var(--accent-dim); border-color:var(--accent); }
-.disk-unit.free   { background:var(--surface2); }
+.disk-unit.used { background:var(--accent-dim); border-color:var(--accent); }
+.disk-unit.free { background:var(--surface2); }
 
-.section-title {
-  font-size:16px; font-weight:700; margin-bottom:16px;
-  display:flex; align-items:center; gap:8px;
+.empty-state {
+  background:var(--surface); border:1px dashed var(--border);
+  border-radius:var(--radius-lg); padding:48px;
+  text-align:center; color:var(--text-muted);
 }
-.section-title .material-symbols-rounded { font-size:20px; color:var(--accent); }
+.empty-state .material-symbols-rounded { font-size:48px; color:var(--text-dim); margin-bottom:12px; }
+.empty-state h3 { font-size:16px; font-weight:700; margin-bottom:8px; color:var(--text); }
 </style>
 </head>
 <body>
@@ -93,7 +75,6 @@
   <header class="topbar" id="topbar"></header>
   <aside class="sidebar" id="sidebar"></aside>
   <main class="main" id="main">
-    <!-- Page header -->
     <div class="page-header">
       <div>
         <h1 class="page-title">Dashboard</h1>
@@ -102,10 +83,8 @@
       <div class="page-actions" id="page-actions"></div>
     </div>
 
-    <!-- Overview stats -->
     <div class="overview-grid" id="overview-grid"></div>
 
-    <!-- Tabs -->
     <div class="tabs" id="dash-tabs">
       <div class="tab active" data-tab="nodes" onclick="switchTab('nodes')">
         <span class="material-symbols-rounded">storage</span> Server Fisici
@@ -114,7 +93,7 @@
         <span class="material-symbols-rounded">hub</span> Cluster
       </div>
       <div class="tab" data-tab="backup" onclick="switchTab('backup')">
-        <span class="material-symbols-rounded">backup</span> Backup Server
+        <span class="material-symbols-rounded">backup</span> Backup Target
       </div>
     </div>
 
@@ -122,40 +101,59 @@
   </main>
 </div>
 
+<script src="api.js"></script>
 <script src="shared.js"></script>
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-async function bootstrap() {
-  await loadTreeData();
-  buildSidebar('dashboard');
+let DATA = null;
+
+async function init() {
+  await buildSidebar('dashboard');
+
+  // If no servers registered, show empty state and stop.
+  const credId = await ensureActiveCred();
+  if (!credId) {
+    document.getElementById('overview-grid').innerHTML = '';
+    document.getElementById('dash-tabs').style.display = 'none';
+    document.getElementById('tab-content').innerHTML = `
+      <div class="empty-state">
+        <span class="material-symbols-rounded">dns</span>
+        <h3>Nessun server Proxmox configurato</h3>
+        <p>Aggiungi le credenziali di un server Proxmox per iniziare.</p>
+        <a href="servers.html" class="btn btn-primary" style="margin-top:16px">
+          <span class="material-symbols-rounded">add</span> Aggiungi server Proxmox
+        </a>
+      </div>`;
+    return;
+  }
+
+  DATA = await ensureClusterData();
+
+  if (can(session, 'add_server')) {
+    document.getElementById('page-actions').innerHTML = `
+      <a href="servers.html" class="btn btn-secondary">
+        <span class="material-symbols-rounded">dns</span> Server
+      </a>`;
+  }
+
   renderOverview();
   switchTab('nodes');
 }
 
-// Inject add button for admin
-if (can(session,'add_server')) {
-  document.getElementById('page-actions').innerHTML = `
-    <button class="btn btn-primary" onclick="showToast('Funzione disponibile nella versione backend','info')">
-      <span class="material-symbols-rounded">add</span> Aggiungi nodo
-    </button>`;
-}
-
-// Overview stats
 function renderOverview() {
-  const d = mapData();
-  const totalVMs = d.vms.filter(v=>v.type==='vm').length;
-  const totalCTs = d.vms.filter(v=>v.type==='ct').length;
-  const running  = d.vms.filter(v=>v.status==='running').length;
-  const nodes    = d.nodes.length;
-  const nodesUp  = d.nodes.filter(n=>n.status==='running').length;
+  const d = DATA;
+  const totalVMs = d.vms.filter(v => v.type === 'vm').length;
+  const totalCTs = d.vms.filter(v => v.type === 'ct').length;
+  const running  = d.vms.filter(v => v.status === 'running').length;
+  const nodesUp  = d.nodes.filter(n => n.status === 'running').length;
 
   const cards = [
-    { icon:'storage',  color:'var(--info)',    bg:'var(--info-dim)',    val: nodes,     lbl:'Nodi Fisici',   sub:`${nodesUp} online` },
-    { icon:'computer', color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,  lbl:'Macchine Virtuali', sub:`${running} running` },
-    { icon:'deployed_code', color:'#5dd05d',  bg:'#0c2e0c',           val: totalCTs,  lbl:'Container',     sub:`${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
-    { icon:'hub',      color:'var(--warning)', bg:'var(--warning-dim)', val: d.clusters.length, lbl:'Cluster', sub:`${d.clusters.filter(c=>c.status==='ok').length} healthy` },
-    { icon:'backup',   color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Server', sub:'tutti online' },
+    { icon:'storage',        color:'var(--info)',    bg:'var(--info-dim)',    val: d.nodes.length,   lbl:'Nodi Fisici',    sub: `${nodesUp} online` },
+    { icon:'computer',       color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,         lbl:'Macchine Virtuali', sub: `${d.vms.filter(v=>v.type==='vm'&&v.status==='running').length} running` },
+    { icon:'deployed_code',  color:'#5dd05d',        bg:'#0c2e0c',            val: totalCTs,         lbl:'Container',      sub: `${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
+    { icon:'hub',            color:'var(--warning)', bg:'var(--warning-dim)', val: d.clusters.length, lbl:'Cluster',        sub: d.clusters.length ? `${d.clusters.filter(c=>c.status==='ok').length} healthy` : '—' },
+    { icon:'backup',         color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Target', sub: d.backupServers.length ? 'configurati' : 'nessuno' },
   ];
   document.getElementById('overview-grid').innerHTML = cards.map(c => `
     <div class="stat-card-lg">
@@ -168,9 +166,8 @@ function renderOverview() {
     </div>`).join('');
 }
 
-// Tab content
 function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===tab));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
   const el = document.getElementById('tab-content');
   if (tab === 'nodes')   el.innerHTML = renderNodes();
   if (tab === 'cluster') el.innerHTML = renderClusters();
@@ -184,52 +181,56 @@ function barColor(pct) {
 }
 
 function renderNodes() {
-  const data = mapData();
-  return `<div class="node-grid">${data.nodes.map(node => {
-    const vms = data.vms.filter(v=>v.node===node.id);
-    const vmList = vms.slice(0,6).map(v=>`
-      <a href="vm-detail.html?id=${v.id}" class="chip ${v.status==='running'?'chip-running':'chip-stopped'}" style="text-decoration:none">
-        <span class="material-symbols-rounded" style="font-size:12px">${v.type==='vm'?'computer':'deployed_code'}</span>
-        ${v.name}
+  if (!DATA.nodes.length) {
+    return `<div class="empty-state"><span class="material-symbols-rounded">storage</span><h3>Nessun nodo disponibile</h3></div>`;
+  }
+  return `<div class="node-grid">${DATA.nodes.map(node => {
+    const vms = DATA.vms.filter(v => v.node === node.id);
+    const vmList = vms.slice(0, 6).map(v => `
+      <a href="vm-detail.html?id=${v.id}" class="chip ${v.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="text-decoration:none">
+        <span class="material-symbols-rounded" style="font-size:12px">${v.type === 'vm' ? 'computer' : 'deployed_code'}</span>
+        ${escapeHtml(v.name)}
       </a>`).join('');
     return `<div class="node-card">
       <div class="node-card-header">
-        <span class="material-symbols-rounded" style="color:${node.status==='running'?'var(--success)':'var(--text-dim)'}">storage</span>
+        <span class="material-symbols-rounded" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
         <div>
-          <h3><a href="node-detail.html?id=${node.id}" style="color:var(--text);text-decoration:none">${node.name}</a></h3>
+          <h3><a href="node-detail.html?id=${node.id}" style="color:var(--text);text-decoration:none">${escapeHtml(node.name)}</a></h3>
           <div class="text-xs text-muted">Uptime: ${node.uptime}</div>
         </div>
         <span class="node-status">
-          <span class="chip ${node.status==='running'?'chip-running':'chip-stopped'}">${node.status}</span>
+          <span class="chip ${node.status === 'running' ? 'chip-running' : 'chip-stopped'}">${node.status}</span>
         </span>
       </div>
       <div class="node-metrics">
-        ${['cpu','mem','disk'].map(m=>`<div class="node-metric">
+        ${['cpu','mem','disk'].map(m => `<div class="node-metric">
           <span class="node-metric-label">${m.toUpperCase()}</span>
           <span class="node-metric-val" style="color:${barColor(node[m])}">${node[m]}%</span>
           <div class="node-metric-bar"><div class="node-metric-fill" style="width:${node[m]}%;background:${barColor(node[m])}"></div></div>
         </div>`).join('')}
       </div>
-      <div class="node-vms">${vmList}${vms.length>6?`<span class="chip chip-stopped">+${vms.length-6}</span>`:''}</div>
+      <div class="node-vms">${vmList}${vms.length > 6 ? `<span class="chip chip-stopped">+${vms.length - 6}</span>` : ''}</div>
     </div>`;
   }).join('')}</div>`;
 }
 
 function renderClusters() {
-  const data = mapData();
-  return `<div class="node-grid">${data.clusters.map(cl=>{
-    const nodes = data.nodes.filter(n=>cl.nodes.includes(n.id));
-    const pills = nodes.map(n=>`
+  if (!DATA.clusters.length) {
+    return `<div class="empty-state"><span class="material-symbols-rounded">hub</span><h3>Nessun cluster</h3><p>I nodi registrati sono standalone.</p></div>`;
+  }
+  return `<div class="node-grid">${DATA.clusters.map(cl => {
+    const nodes = DATA.nodes.filter(n => cl.nodes.includes(n.id));
+    const pills = nodes.map(n => `
       <a href="node-detail.html?id=${n.id}" class="cluster-node-pill">
-        <span class="status-dot ${n.status==='running'?'running':'stopped'}"></span>
-        ${n.name}
-        <span class="text-xs text-muted">${data.vms.filter(v=>v.node===n.id).length} VM/CT</span>
+        <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
+        ${escapeHtml(n.name)}
+        <span class="text-xs text-muted">${DATA.vms.filter(v => v.node === n.id).length} VM/CT</span>
       </a>`).join('');
     return `<div class="cluster-card">
       <div class="cluster-header">
         <span class="material-symbols-rounded" style="color:var(--info)">hub</span>
-        <h3>${cl.name}</h3>
-        <span class="chip ${cl.status==='ok'?'chip-running':'chip-paused'}" style="margin-left:auto">${cl.status}</span>
+        <h3>${escapeHtml(cl.name)}</h3>
+        <span class="chip ${cl.status === 'ok' ? 'chip-running' : 'chip-paused'}" style="margin-left:auto">${cl.status}</span>
       </div>
       <div class="cluster-nodes">${pills}</div>
     </div>`;
@@ -237,21 +238,23 @@ function renderClusters() {
 }
 
 function renderBackup() {
-  const data = mapData();
-  return `<div class="node-grid">${data.backupServers.map(bs=>{
-    const pct = Math.round(bs.diskUsed/bs.diskTotal*100);
-    const total = Math.round(bs.diskTotal/1024);
-    const used  = Math.round(bs.diskUsed/1024);
+  if (!DATA.backupServers.length) {
+    return `<div class="empty-state"><span class="material-symbols-rounded">backup</span><h3>Nessun backup target</h3><p>Non sono configurati storage di backup.</p></div>`;
+  }
+  return `<div class="node-grid">${DATA.backupServers.map(bs => {
+    const pct = bs.diskTotal ? Math.round(bs.diskUsed / bs.diskTotal * 100) : 0;
+    const total = Math.round(bs.diskTotal / 1024);
+    const used = Math.round(bs.diskUsed / 1024);
     const diskCount = 8;
-    const usedDisks = Math.round(pct/100*diskCount);
-    const disks = Array.from({length:diskCount},(_,i)=>`
-      <div class="disk-unit ${i<usedDisks?'used':'free'}">
-        <span class="material-symbols-rounded" style="font-size:14px;color:${i<usedDisks?'var(--accent)':'var(--text-dim)'}">storage</span>
+    const usedDisks = Math.round(pct / 100 * diskCount);
+    const disks = Array.from({ length: diskCount }, (_, i) => `
+      <div class="disk-unit ${i < usedDisks ? 'used' : 'free'}">
+        <span class="material-symbols-rounded" style="font-size:14px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">storage</span>
       </div>`).join('');
     return `<div class="pbs-card">
       <div class="pbs-header">
         <span class="material-symbols-rounded" style="color:var(--warning)">backup</span>
-        <h3>${bs.name}</h3>
+        <h3>${escapeHtml(bs.name)}</h3>
         <span class="chip chip-running" style="margin-left:auto">${bs.status}</span>
       </div>
       <div class="disk-rack">${disks}</div>
@@ -265,34 +268,7 @@ function renderBackup() {
   }).join('')}</div>`;
 }
 
-function mapData() {
-  const tree = LIVE_DATA.tree || {};
-  const nodes = (tree.nodes || []).map(n => ({
-    id: n.node,
-    name: n.node,
-    status: n.status === 'online' ? 'running' : 'stopped',
-    cpu: Math.round((n.cpu || 0) * 100),
-    mem: n.maxmem ? Math.round(((n.mem || 0) / n.maxmem) * 100) : 0,
-    disk: n.maxdisk ? Math.round(((n.disk || 0) / n.maxdisk) * 100) : 0,
-    uptime: n.uptime || '-',
-  }));
-  const vms = [];
-  (tree.nodes || []).forEach(n => {
-    (n.vms || []).forEach(v => vms.push({ id: v.vmid, name: v.name || `vm-${v.vmid}`, node: n.node, type: 'vm', status: v.status || 'stopped' }));
-    (n.cts || []).forEach(c => vms.push({ id: c.vmid, name: c.name || `ct-${c.vmid}`, node: n.node, type: 'ct', status: c.status || 'stopped' }));
-  });
-  const clusters = [{ id: 'c1', name: tree.cluster?.name || 'cluster', nodes: nodes.map(n => n.id), status: tree.cluster?.quorate ? 'ok' : 'degraded' }];
-  const backupServers = (tree.backup_targets || []).map((b, i) => ({
-    id: `backup-${i}`,
-    name: `${b.storage}@${b.node}`,
-    status: 'running',
-    diskTotal: b.total || 0,
-    diskUsed: b.used || 0,
-  }));
-  return { nodes, vms, clusters, backupServers };
-}
-
-bootstrap();
+init();
 </script>
 </body>
 </html>
