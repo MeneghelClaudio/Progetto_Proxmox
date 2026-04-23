@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Utenti & Permessi — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css"/>
+<style>
+.users-layout { display:grid; grid-template-columns:1fr 340px; gap:16px; align-items:start; }
+
+/* User card */
+.user-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:18px;
+  display:flex; align-items:center; gap:14px;
+  transition:border-color .15s;
+}
+.user-card:hover { border-color:var(--border2); }
+.user-card-avatar {
+  width:42px; height:42px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px; font-weight:800; flex-shrink:0;
+}
+.user-card-info { flex:1; min-width:0; }
+.user-card-name { font-size:14px; font-weight:700; }
+.user-card-email { font-size:12px; color:var(--text-muted); font-family:var(--mono); }
+.user-card-meta  { font-size:11px; color:var(--text-dim); margin-top:2px; }
+.user-card-actions { display:flex; gap:6px; }
+
+/* Permission matrix */
+.perm-matrix {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); overflow:hidden;
+}
+.perm-matrix-header {
+  padding:14px 18px; border-bottom:1px solid var(--border);
+  font-size:12px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.6px; color:var(--text-muted);
+}
+.perm-row {
+  display:flex; align-items:center;
+  padding:11px 18px; border-bottom:1px solid var(--border);
+  gap:10px; font-size:13px;
+}
+.perm-row:last-child { border-bottom:none; }
+.perm-row:hover { background:var(--surface2); }
+.perm-label { flex:1; }
+.perm-desc  { font-size:11px; color:var(--text-muted); }
+.perm-check {
+  width:20px; height:20px; border-radius:50%;
+  display:flex; align-items:center; justify-content:center;
+  flex-shrink:0;
+}
+.perm-check.yes { background:var(--success-dim); color:var(--success); }
+.perm-check.no  { background:var(--surface3); color:var(--text-dim); }
+.perm-cols { display:flex; gap:12px; align-items:center; }
+.perm-col-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; width:70px; text-align:center; }
+
+/* Role legend */
+.role-legend { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; }
+.role-item {
+  display:flex; align-items:center; gap:6px;
+  padding:6px 12px; border-radius:var(--radius);
+  background:var(--surface); border:1px solid var(--border);
+  font-size:12.5px;
+}
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Utenti &amp; Permessi</h1>
+        <p class="page-subtitle">Gestione accessi e livelli di autorizzazione</p>
+      </div>
+      <div class="page-actions" id="admin-actions"></div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="users"  onclick="switchTab('users')">
+        <span class="material-symbols-rounded">group</span> Utenti
+      </div>
+      <div class="tab" data-tab="matrix" onclick="switchTab('matrix')">
+        <span class="material-symbols-rounded">table_chart</span> Matrice permessi
+      </div>
+      <div class="tab" data-tab="commands" onclick="switchTab('commands')">
+        <span class="material-symbols-rounded">terminal</span> Comandi API Proxmox
+      </div>
+    </div>
+
+    <div id="tab-content"></div>
+
+    <!-- Modal add user -->
+    <div class="modal-overlay hidden" id="modal-add-user">
+      <div class="modal">
+        <div class="modal-title">Aggiungi utente</div>
+        <div class="form-group">
+          <label class="form-label">Nome completo</label>
+          <input type="text" class="form-input" id="new-name" placeholder="Mario Rossi"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Username</label>
+          <input type="text" class="form-input" id="new-username" placeholder="mario.rossi"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Email</label>
+          <input type="email" class="form-input" id="new-email" placeholder="mario@azienda.it"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password</label>
+          <input type="password" class="form-input" id="new-password" placeholder="••••••••"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Ruolo</label>
+          <select class="form-input" id="new-role">
+            <option value="admin">Admin Local</option>
+            <option value="senior">Admin Senior</option>
+            <option value="junior">Admin Junior</option>
+          </select>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-user')">Annulla</button>
+          <button class="btn btn-primary" onclick="addUser()">
+            <span class="material-symbols-rounded">person_add</span> Aggiungi
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+if (!can(session,'manage_cluster')) { showToast('Accesso negato — solo Admin Local','danger'); setTimeout(()=>location.href='dashboard.html',1500); }
+buildSidebar('users');
+
+if (session.level==='admin') {
+  document.getElementById('admin-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="openModal('modal-add-user')">
+      <span class="material-symbols-rounded">person_add</span> Aggiungi utente
+    </button>`;
+}
+
+let mockUsers = [
+  { id:1, name:'Admin Local',  username:'admin',  email:'admin@proxmox.local',  role:'Admin Local',  level:'admin',  created:'2024-01-10', lastLogin:'2024-05-13 09:22', active:true  },
+  { id:2, name:'Senior Admin', username:'senior', email:'senior@proxmox.local', role:'Admin Senior', level:'senior', created:'2024-02-15', lastLogin:'2024-05-12 14:05', active:true  },
+  { id:3, name:'Junior Admin', username:'junior', email:'junior@proxmox.local', role:'Admin Junior', level:'junior', created:'2024-03-20', lastLogin:'2024-05-10 11:30', active:true  },
+  { id:4, name:'Marco Verdi',  username:'m.verdi', email:'m.verdi@azienda.it',  role:'Admin Junior', level:'junior', created:'2024-04-05', lastLogin:'2024-05-08 08:00', active:false },
+];
+
+// Permission matrix data
+const perms = [
+  { label:'Accesso Dashboard',      desc:'Visualizzazione panoramica',  admin:true,  senior:true,  junior:true  },
+  { label:'Visualizza nodi',         desc:'Statistiche e lista VM',      admin:true,  senior:true,  junior:true  },
+  { label:'Visualizza VM/Container', desc:'Dettaglio singola macchina',  admin:true,  senior:true,  junior:true  },
+  { label:'Avvio / Stop VM',         desc:'Gestione stato macchine',     admin:true,  senior:true,  junior:false },
+  { label:'Reboot / Shutdown',       desc:'Riavvio e spegnimento',       admin:true,  senior:true,  junior:false },
+  { label:'Crea snapshot',           desc:'Snapshot manuali e schedulati', admin:true, senior:true, junior:false },
+  { label:'Elimina snapshot',        desc:'Rimozione snapshot',          admin:true,  senior:true,  junior:false },
+  { label:'Clona VM',                desc:'Copia VM su altro nodo',      admin:true,  senior:true,  junior:false },
+  { label:'Elimina VM',              desc:'Rimozione definitiva',        admin:true,  senior:false, junior:false },
+  { label:'Migrazione VM',           desc:'Spostamento tra nodi',        admin:true,  senior:true,  junior:false },
+  { label:'Backup manuale',          desc:'Avvio backup immediato',      admin:true,  senior:true,  junior:false },
+  { label:'Aggiungi server cluster', desc:'Join nodo a cluster',         admin:true,  senior:false, junior:false },
+  { label:'Gestione utenti',         desc:'Crea/modifica/elimina utenti', admin:true, senior:false, junior:false },
+  { label:'Comandi API avanzati',    desc:'Accesso API Proxmox completo', admin:true, senior:false, junior:false },
+];
+
+// Proxmox API commands
+const apiCommands = [
+  { cat:'Autenticazione',  cmd:'POST /api2/json/access/ticket',                   desc:'Login — ottenere ticket di autenticazione',     level:'all'   },
+  { cat:'Nodi',            cmd:'GET  /api2/json/nodes',                            desc:'Lista di tutti i nodi del cluster',              level:'all'   },
+  { cat:'Nodi',            cmd:'GET  /api2/json/nodes/{node}/status',              desc:'Stato e statistiche del nodo',                  level:'all'   },
+  { cat:'VM',              cmd:'GET  /api2/json/nodes/{node}/qemu',                desc:'Lista VM su un nodo',                           level:'all'   },
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/start',  desc:'Avvia una VM',                           level:'senior'},
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/stop',   desc:'Ferma una VM (force stop)',               level:'senior'},
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/shutdown', desc:'Shutdown graceful',                     level:'senior'},
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/status/reboot',  desc:'Riavvia una VM',                         level:'senior'},
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/migrate',  desc:'Migra VM su altro nodo',                       level:'senior'},
+  { cat:'VM',              cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/clone',    desc:'Clona VM',                                     level:'senior'},
+  { cat:'VM',              cmd:'DELETE /api2/json/nodes/{node}/qemu/{vmid}',        desc:'Elimina VM (irreversibile)',                    level:'admin' },
+  { cat:'Container',       cmd:'GET  /api2/json/nodes/{node}/lxc',                 desc:'Lista container LXC',                          level:'all'   },
+  { cat:'Container',       cmd:'POST /api2/json/nodes/{node}/lxc/{vmid}/status/start', desc:'Avvia container',                          level:'senior'},
+  { cat:'Container',       cmd:'POST /api2/json/nodes/{node}/lxc/{vmid}/migrate',  desc:'Migra container',                              level:'senior'},
+  { cat:'Snapshot',        cmd:'GET  /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc:'Lista snapshot VM',                           level:'all'   },
+  { cat:'Snapshot',        cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot', desc:'Crea snapshot',                               level:'senior'},
+  { cat:'Snapshot',        cmd:'POST /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}/rollback', desc:'Ripristina snapshot',         level:'senior'},
+  { cat:'Snapshot',        cmd:'DELETE /api2/json/nodes/{node}/qemu/{vmid}/snapshot/{name}', desc:'Elimina snapshot',                   level:'admin' },
+  { cat:'Cluster',         cmd:'GET  /api2/json/cluster/status',                   desc:'Stato del cluster',                            level:'all'   },
+  { cat:'Cluster',         cmd:'POST /api2/json/cluster/config/nodes/{node}',      desc:'Aggiungi nodo al cluster',                     level:'admin' },
+  { cat:'Backup',          cmd:'GET  /api2/json/nodes/{node}/vzdump',              desc:'Lista job backup',                              level:'all'   },
+  { cat:'Backup',          cmd:'POST /api2/json/nodes/{node}/vzdump',              desc:'Avvia backup manuale',                         level:'senior'},
+  { cat:'Storage',         cmd:'GET  /api2/json/nodes/{node}/storage',             desc:'Lista storage del nodo',                       level:'all'   },
+  { cat:'Accesso',         cmd:'GET  /api2/json/access/users',                     desc:'Lista utenti',                                  level:'admin' },
+  { cat:'Accesso',         cmd:'POST /api2/json/access/users',                     desc:'Crea nuovo utente',                             level:'admin' },
+  { cat:'Accesso',         cmd:'PUT  /api2/json/access/users/{userid}',            desc:'Modifica utente',                               level:'admin' },
+  { cat:'Accesso',         cmd:'DELETE /api2/json/access/users/{userid}',          desc:'Elimina utente',                                level:'admin' },
+];
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
+  const el = document.getElementById('tab-content');
+  if (tab==='users')    el.innerHTML = renderUsers();
+  if (tab==='matrix')   el.innerHTML = renderMatrix();
+  if (tab==='commands') el.innerHTML = renderCommands();
+}
+
+function levelColors(level) {
+  return {
+    admin:  {bg:'#3a1f0a', text:'var(--accent)',  border:'var(--accent)'},
+    senior: {bg:'var(--info-dim)', text:'var(--info)', border:'var(--info)'},
+    junior: {bg:'var(--success-dim)', text:'var(--success)', border:'var(--success)'},
+  }[level] || {bg:'var(--surface3)', text:'var(--text-muted)', border:'var(--border)'};
+}
+
+function renderUsers() {
+  const userCards = mockUsers.map(u => {
+    const c = levelColors(u.level);
+    const initials = u.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+    return `<div class="user-card ${!u.active?'opacity-50':''}">
+      <div class="user-card-avatar" style="background:${c.bg};color:${c.text};border:2px solid ${c.border}">${initials}</div>
+      <div class="user-card-info">
+        <div class="user-card-name">${u.name} ${!u.active?'<span class="chip chip-stopped" style="font-size:10px">inattivo</span>':''}</div>
+        <div class="user-card-email">${u.email}</div>
+        <div class="user-card-meta">Creato: ${u.created} &nbsp;·&nbsp; Ultimo login: ${u.lastLogin}</div>
+      </div>
+      <span class="role-badge ${u.level}">${u.role}</span>
+      ${session.level==='admin' ? `<div class="user-card-actions">
+        <button class="btn btn-sm btn-secondary" onclick="showToast('Modifica utente (simulato)','info')">
+          <span class="material-symbols-rounded">edit</span>
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="deleteUser(${u.id},'${u.name}')">
+          <span class="material-symbols-rounded">delete</span>
+        </button>
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `<div style="display:flex;flex-direction:column;gap:10px">${userCards}</div>`;
+}
+
+function renderMatrix() {
+  const check = (v) => `<div class="perm-check ${v?'yes':'no'}">
+    <span class="material-symbols-rounded" style="font-size:14px">${v?'check':'close'}</span>
+  </div>`;
+  return `
+    <div class="role-legend">
+      <div class="role-item"><span class="role-badge admin">admin</span> Admin Local — accesso completo</div>
+      <div class="role-item"><span class="role-badge senior">senior</span> Admin Senior — gestione operativa</div>
+      <div class="role-item"><span class="role-badge junior">junior</span> Admin Junior — sola lettura</div>
+    </div>
+    <div class="perm-matrix">
+      <div class="perm-matrix-header">
+        <div class="flex items-center">
+          <span style="flex:1">Permesso</span>
+          <div class="perm-cols">
+            <div class="perm-col-head" style="color:var(--accent)">Admin</div>
+            <div class="perm-col-head" style="color:var(--info)">Senior</div>
+            <div class="perm-col-head" style="color:var(--success)">Junior</div>
+          </div>
+        </div>
+      </div>
+      ${perms.map(p=>`
+      <div class="perm-row">
+        <div class="perm-label">
+          <div style="font-weight:600;font-size:13px">${p.label}</div>
+          <div class="perm-desc">${p.desc}</div>
+        </div>
+        <div class="perm-cols">
+          <div style="width:70px;display:flex;justify-content:center">${check(p.admin)}</div>
+          <div style="width:70px;display:flex;justify-content:center">${check(p.senior)}</div>
+          <div style="width:70px;display:flex;justify-content:center">${check(p.junior)}</div>
+        </div>
+      </div>`).join('')}
+    </div>`;
+}
+
+function renderCommands() {
+  const cats = [...new Set(apiCommands.map(c=>c.cat))];
+  const levelColor = {all:'var(--text-muted)', senior:'var(--info)', admin:'var(--accent)'};
+  const levelLabel = {all:'Tutti', senior:'Senior+', admin:'Solo Admin'};
+  return cats.map(cat => `
+    <div class="card mb-16">
+      <div class="card-header">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">terminal</span>
+        <span class="card-title">${cat}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Endpoint</th><th>Descrizione</th><th>Accesso minimo</th></tr></thead>
+        <tbody>${apiCommands.filter(c=>c.cat===cat).map(c=>`
+          <tr>
+            <td><code style="font-family:var(--mono);font-size:11.5px;color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:4px">${c.cmd}</code></td>
+            <td class="text-muted" style="font-size:13px">${c.desc}</td>
+            <td><span class="role-badge ${c.level==='all'?'junior':c.level}" style="font-size:10px">${levelLabel[c.level]}</span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`).join('');
+}
+
+function deleteUser(id, name) {
+  if (!confirm(`Eliminare l'utente "${name}"?`)) return;
+  mockUsers = mockUsers.filter(u=>u.id!==id);
+  switchTab('users');
+  showToast(`Utente ${name} eliminato`, 'warning');
+}
+
+function addUser() {
+  const name = document.getElementById('new-name').value;
+  const username = document.getElementById('new-username').value;
+  const email = document.getElementById('new-email').value;
+  const level = document.getElementById('new-role').value;
+  const roles = {admin:'Admin Local', senior:'Admin Senior', junior:'Admin Junior'};
+  if (!name||!username) { showToast('Compila tutti i campi obbligatori','warning'); return; }
+  mockUsers.push({
+    id: Date.now(), name, username, email,
+    role: roles[level], level, created: new Date().toISOString().slice(0,10),
+    lastLogin: '-', active: true,
+  });
+  closeModal('modal-add-user');
+  switchTab('users');
+  showToast(`Utente ${name} aggiunto`, 'success');
+}
+
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+switchTab('users');
+</script>
+</body>
+</html>

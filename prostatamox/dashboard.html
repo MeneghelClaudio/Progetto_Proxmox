@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Dashboard — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+.overview-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; margin-bottom:24px; }
+.stat-card-lg {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:20px;
+  display:flex; flex-direction:column; gap:6px;
+}
+.stat-card-lg .sc-icon {
+  width:36px; height:36px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center; margin-bottom:4px;
+}
+.stat-card-lg .sc-val { font-size:28px; font-weight:800; font-family:var(--mono); line-height:1; }
+.stat-card-lg .sc-lbl { font-size:12px; color:var(--text-muted); font-weight:500; }
+.stat-card-lg .sc-sub { font-size:11px; color:var(--text-dim); margin-top:2px; }
+
+/* Node cards */
+.node-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr)); gap:16px; }
+.node-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); overflow:hidden;
+  transition:border-color .15s;
+}
+.node-card:hover { border-color:var(--border2); }
+.node-card-header {
+  display:flex; align-items:center; gap:10px;
+  padding:16px 16px 12px;
+}
+.node-card-header h3 { font-size:15px; font-weight:700; }
+.node-card-header .node-status { margin-left:auto; }
+.node-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; padding:0 16px 16px; }
+.node-metric { display:flex; flex-direction:column; gap:4px; }
+.node-metric-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--text-muted); }
+.node-metric-val { font-size:18px; font-weight:700; font-family:var(--mono); }
+.node-metric-bar { height:3px; border-radius:2px; background:var(--surface3); overflow:hidden; }
+.node-metric-fill { height:100%; border-radius:2px; }
+.node-vms {
+  border-top:1px solid var(--border); padding:10px 16px;
+  display:flex; gap:6px; flex-wrap:wrap;
+}
+
+/* Cluster grid */
+.cluster-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:20px;
+}
+.cluster-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+.cluster-header h3 { font-size:15px; font-weight:700; }
+.cluster-nodes { display:flex; gap:8px; flex-wrap:wrap; }
+.cluster-node-pill {
+  display:flex; align-items:center; gap:6px;
+  padding:6px 12px; border-radius:20px;
+  background:var(--surface2); border:1px solid var(--border);
+  font-size:12.5px; cursor:pointer; transition:border-color .12s;
+  text-decoration:none; color:var(--text);
+}
+.cluster-node-pill:hover { border-color:var(--accent); color:var(--accent); }
+
+/* Backup server cards */
+.pbs-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:20px;
+}
+.pbs-header { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+.disk-rack {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(28px,1fr)); gap:4px;
+  margin-bottom:12px;
+}
+.disk-unit {
+  height:36px; border-radius:4px;
+  border:1px solid var(--border);
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px;
+}
+.disk-unit.used   { background:var(--accent-dim); border-color:var(--accent); }
+.disk-unit.free   { background:var(--surface2); }
+
+.section-title {
+  font-size:16px; font-weight:700; margin-bottom:16px;
+  display:flex; align-items:center; gap:8px;
+}
+.section-title .material-symbols-rounded { font-size:20px; color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <!-- Page header -->
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-subtitle">Panoramica completa dell'infrastruttura</p>
+      </div>
+      <div class="page-actions" id="page-actions"></div>
+    </div>
+
+    <!-- Overview stats -->
+    <div class="overview-grid" id="overview-grid"></div>
+
+    <!-- Tabs -->
+    <div class="tabs" id="dash-tabs">
+      <div class="tab active" data-tab="nodes" onclick="switchTab('nodes')">
+        <span class="material-symbols-rounded">storage</span> Server Fisici
+      </div>
+      <div class="tab" data-tab="cluster" onclick="switchTab('cluster')">
+        <span class="material-symbols-rounded">hub</span> Cluster
+      </div>
+      <div class="tab" data-tab="backup" onclick="switchTab('backup')">
+        <span class="material-symbols-rounded">backup</span> Backup Server
+      </div>
+    </div>
+
+    <div id="tab-content"></div>
+  </main>
+</div>
+
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+buildSidebar('dashboard');
+
+// Inject add button for admin
+if (can(session,'add_server')) {
+  document.getElementById('page-actions').innerHTML = `
+    <button class="btn btn-primary" onclick="showToast('Funzione disponibile nella versione backend','info')">
+      <span class="material-symbols-rounded">add</span> Aggiungi nodo
+    </button>`;
+}
+
+// Overview stats
+function renderOverview() {
+  const d = MOCK_DATA;
+  const totalVMs = d.vms.filter(v=>v.type==='vm').length;
+  const totalCTs = d.vms.filter(v=>v.type==='ct').length;
+  const running  = d.vms.filter(v=>v.status==='running').length;
+  const nodes    = d.nodes.length;
+  const nodesUp  = d.nodes.filter(n=>n.status==='running').length;
+
+  const cards = [
+    { icon:'storage',  color:'var(--info)',    bg:'var(--info-dim)',    val: nodes,     lbl:'Nodi Fisici',   sub:`${nodesUp} online` },
+    { icon:'computer', color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,  lbl:'Macchine Virtuali', sub:`${running} running` },
+    { icon:'deployed_code', color:'#5dd05d',  bg:'#0c2e0c',           val: totalCTs,  lbl:'Container',     sub:`${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
+    { icon:'hub',      color:'var(--warning)', bg:'var(--warning-dim)', val: d.clusters.length, lbl:'Cluster', sub:`${d.clusters.filter(c=>c.status==='ok').length} healthy` },
+    { icon:'backup',   color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Server', sub:'tutti online' },
+  ];
+  document.getElementById('overview-grid').innerHTML = cards.map(c => `
+    <div class="stat-card-lg">
+      <div class="sc-icon" style="background:${c.bg}">
+        <span class="material-symbols-rounded" style="color:${c.color};font-size:20px">${c.icon}</span>
+      </div>
+      <div class="sc-val" style="color:${c.color}">${c.val}</div>
+      <div class="sc-lbl">${c.lbl}</div>
+      <div class="sc-sub">${c.sub}</div>
+    </div>`).join('');
+}
+
+// Tab content
+function switchTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab===tab));
+  const el = document.getElementById('tab-content');
+  if (tab === 'nodes')   el.innerHTML = renderNodes();
+  if (tab === 'cluster') el.innerHTML = renderClusters();
+  if (tab === 'backup')  el.innerHTML = renderBackup();
+}
+
+function barColor(pct) {
+  if (pct > 80) return 'var(--danger)';
+  if (pct > 60) return 'var(--warning)';
+  return 'var(--success)';
+}
+
+function renderNodes() {
+  return `<div class="node-grid">${MOCK_DATA.nodes.map(node => {
+    const vms = MOCK_DATA.vms.filter(v=>v.node===node.id);
+    const vmList = vms.slice(0,6).map(v=>`
+      <a href="vm-detail.html?id=${v.id}" class="chip ${v.status==='running'?'chip-running':'chip-stopped'}" style="text-decoration:none">
+        <span class="material-symbols-rounded" style="font-size:12px">${v.type==='vm'?'computer':'deployed_code'}</span>
+        ${v.name}
+      </a>`).join('');
+    return `<div class="node-card">
+      <div class="node-card-header">
+        <span class="material-symbols-rounded" style="color:${node.status==='running'?'var(--success)':'var(--text-dim)'}">storage</span>
+        <div>
+          <h3><a href="node-detail.html?id=${node.id}" style="color:var(--text);text-decoration:none">${node.name}</a></h3>
+          <div class="text-xs text-muted">Uptime: ${node.uptime}</div>
+        </div>
+        <span class="node-status">
+          <span class="chip ${node.status==='running'?'chip-running':'chip-stopped'}">${node.status}</span>
+        </span>
+      </div>
+      <div class="node-metrics">
+        ${['cpu','mem','disk'].map(m=>`<div class="node-metric">
+          <span class="node-metric-label">${m.toUpperCase()}</span>
+          <span class="node-metric-val" style="color:${barColor(node[m])}">${node[m]}%</span>
+          <div class="node-metric-bar"><div class="node-metric-fill" style="width:${node[m]}%;background:${barColor(node[m])}"></div></div>
+        </div>`).join('')}
+      </div>
+      <div class="node-vms">${vmList}${vms.length>6?`<span class="chip chip-stopped">+${vms.length-6}</span>`:''}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderClusters() {
+  return `<div class="node-grid">${MOCK_DATA.clusters.map(cl=>{
+    const nodes = MOCK_DATA.nodes.filter(n=>cl.nodes.includes(n.id));
+    const pills = nodes.map(n=>`
+      <a href="node-detail.html?id=${n.id}" class="cluster-node-pill">
+        <span class="status-dot ${n.status==='running'?'running':'stopped'}"></span>
+        ${n.name}
+        <span class="text-xs text-muted">${MOCK_DATA.vms.filter(v=>v.node===n.id).length} VM/CT</span>
+      </a>`).join('');
+    return `<div class="cluster-card">
+      <div class="cluster-header">
+        <span class="material-symbols-rounded" style="color:var(--info)">hub</span>
+        <h3>${cl.name}</h3>
+        <span class="chip ${cl.status==='ok'?'chip-running':'chip-paused'}" style="margin-left:auto">${cl.status}</span>
+      </div>
+      <div class="cluster-nodes">${pills}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderBackup() {
+  return `<div class="node-grid">${MOCK_DATA.backupServers.map(bs=>{
+    const pct = Math.round(bs.diskUsed/bs.diskTotal*100);
+    const total = Math.round(bs.diskTotal/1024);
+    const used  = Math.round(bs.diskUsed/1024);
+    const diskCount = 8;
+    const usedDisks = Math.round(pct/100*diskCount);
+    const disks = Array.from({length:diskCount},(_,i)=>`
+      <div class="disk-unit ${i<usedDisks?'used':'free'}">
+        <span class="material-symbols-rounded" style="font-size:14px;color:${i<usedDisks?'var(--accent)':'var(--text-dim)'}">storage</span>
+      </div>`).join('');
+    return `<div class="pbs-card">
+      <div class="pbs-header">
+        <span class="material-symbols-rounded" style="color:var(--warning)">backup</span>
+        <h3>${bs.name}</h3>
+        <span class="chip chip-running" style="margin-left:auto">${bs.status}</span>
+      </div>
+      <div class="disk-rack">${disks}</div>
+      <div class="flex items-center justify-between mb-8">
+        <span class="text-sm text-muted">Spazio utilizzato</span>
+        <span class="font-mono text-sm" style="color:${barColor(pct)}">${pct}%</span>
+      </div>
+      <div class="stat-bar"><div class="stat-bar-fill" style="width:${pct}%;background:${barColor(pct)}"></div></div>
+      <div class="text-xs text-muted mt-8">${used} GB / ${total} GB</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+renderOverview();
+switchTab('nodes');
+</script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0" />
+<title>Nodo — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css" />
+<style>
+.metrics-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:24px; }
+.metric-card {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:18px;
+  display:flex; flex-direction:column; gap:8px;
+}
+.metric-header { display:flex; align-items:center; justify-content:space-between; }
+.metric-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); }
+.metric-pct { font-size:26px; font-weight:800; font-family:var(--mono); line-height:1; }
+.metric-detail { font-size:11px; color:var(--text-muted); }
+.ring-wrap { display:flex; align-items:center; justify-content:center; }
+
+/* Node selector */
+.node-selector {
+  display:flex; gap:8px; margin-bottom:20px; flex-wrap:wrap;
+}
+.node-pill {
+  display:flex; align-items:center; gap:6px;
+  padding:7px 14px; border-radius:20px; cursor:pointer;
+  border:1px solid var(--border); font-size:13px; font-weight:500;
+  transition:all .15s;
+}
+.node-pill:hover { border-color:var(--border2); }
+.node-pill.active { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+
+/* Table section */
+.section-sep { height:1px; background:var(--border); margin:24px 0; }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title" id="page-title">Dettaglio Nodo</h1>
+        <p class="page-subtitle" id="page-sub">Statistiche e macchine del nodo</p>
+      </div>
+      <div class="page-actions" id="page-actions"></div>
+    </div>
+
+    <div class="node-selector" id="node-selector"></div>
+    <div id="node-content"></div>
+  </main>
+</div>
+
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+buildSidebar('nodes');
+
+const params = new URLSearchParams(location.search);
+let activeNodeId = params.get('id') || MOCK_DATA.nodes[0].id;
+
+function renderNodeSelector() {
+  document.getElementById('node-selector').innerHTML = MOCK_DATA.nodes.map(n => `
+    <div class="node-pill ${n.id===activeNodeId?'active':''}" onclick="selectNode('${n.id}')">
+      <span class="status-dot ${n.status==='running'?'running':'stopped'}"></span>
+      <span class="material-symbols-rounded" style="font-size:16px">storage</span>
+      ${n.name}
+    </div>`).join('');
+}
+
+function selectNode(id) {
+  activeNodeId = id;
+  renderNodeSelector();
+  renderNode();
+  history.replaceState(null,'','?id='+id);
+}
+
+function barColor(p){ return p>80?'var(--danger)':p>60?'var(--warning)':'var(--success)'; }
+
+function makeRing(pct, color) {
+  const r=28, cx=34, cy=34, circ=2*Math.PI*r;
+  const dash=circ*(pct/100), gap=circ-dash;
+  return `<svg width="68" height="68" viewBox="0 0 68 68">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--surface3)" stroke-width="6"/>
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="6"
+      stroke-dasharray="${dash} ${gap}" stroke-linecap="round"
+      transform="rotate(-90 ${cx} ${cy})"/>
+    <text x="${cx}" y="${cy+5}" text-anchor="middle" font-size="13" font-weight="700" fill="${color}"
+      font-family="'JetBrains Mono',monospace">${pct}%</text>
+  </svg>`;
+}
+
+function renderNode() {
+  const node = MOCK_DATA.nodes.find(n=>n.id===activeNodeId);
+  if (!node) return;
+  document.getElementById('page-title').textContent = `Nodo: ${node.name}`;
+  document.getElementById('page-sub').textContent = `Uptime: ${node.uptime} · ${node.maxcpu} CPU · ${node.maxmem} GB RAM`;
+
+  if (can(session,'start')) {
+    document.getElementById('page-actions').innerHTML = `
+      <button class="btn btn-secondary btn-sm" onclick="showToast('Backup nodo avviato','info')">
+        <span class="material-symbols-rounded">backup</span> Backup nodo
+      </button>
+      <button class="btn btn-secondary btn-sm" onclick="showToast('Snapshot creato','success')">
+        <span class="material-symbols-rounded">camera</span> Snapshot
+      </button>`;
+  }
+
+  const vms = MOCK_DATA.vms.filter(v=>v.node===node.id && v.type==='vm');
+  const cts = MOCK_DATA.vms.filter(v=>v.node===node.id && v.type==='ct');
+
+  document.getElementById('node-content').innerHTML = `
+    <!-- Metric cards -->
+    <div class="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">CPU</span>
+          <span class="material-symbols-rounded" style="font-size:18px;color:var(--info)">memory</span>
+        </div>
+        <div class="ring-wrap">${makeRing(node.cpu, barColor(node.cpu))}</div>
+        <div class="metric-detail">${node.maxcpu} core — ${node.cpu}% in uso</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">RAM</span>
+          <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">storage</span>
+        </div>
+        <div class="ring-wrap">${makeRing(node.mem, barColor(node.mem))}</div>
+        <div class="metric-detail">${Math.round(node.maxmem*node.mem/100)} GB / ${node.maxmem} GB</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-header">
+          <span class="metric-label">Disco</span>
+          <span class="material-symbols-rounded" style="font-size:18px;color:var(--warning)">hard_drive</span>
+        </div>
+        <div class="ring-wrap">${makeRing(node.disk, barColor(node.disk))}</div>
+        <div class="metric-detail">Utilizzo storage locale</div>
+      </div>
+      <div class="metric-card" style="justify-content:space-between">
+        <div class="metric-header">
+          <span class="metric-label">Stato</span>
+        </div>
+        <div>
+          <span class="chip ${node.status==='running'?'chip-running':'chip-stopped'}" style="font-size:14px;padding:6px 12px">
+            <span class="status-dot ${node.status==='running'?'running':'stopped'}"></span>
+            ${node.status}
+          </span>
+        </div>
+        <div class="metric-detail">VM: <b>${node.vms}</b> · CT: <b>${node.cts}</b></div>
+      </div>
+    </div>
+
+    <!-- VMs table -->
+    <div class="card">
+      <div class="card-header">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--info)">computer</span>
+        <span class="card-title">Macchine Virtuali (${vms.length})</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th>OS</th><th></th>
+          </tr></thead>
+          <tbody>${vms.map(vm=>`<tr>
+            <td class="mono">${vm.id}</td>
+            <td><a href="vm-detail.html?id=${vm.id}" style="color:var(--text);font-weight:600">${vm.name}</a></td>
+            <td><span class="chip ${vm.status==='running'?'chip-running':'chip-stopped'}">${vm.status}</span></td>
+            <td><span style="color:${barColor(vm.cpu)}">${vm.cpu}%</span></td>
+            <td><span style="color:${barColor(vm.mem)}">${vm.mem}%</span></td>
+            <td>${vm.disk} GB</td>
+            <td class="text-muted">${vm.os}</td>
+            <td>
+              <div class="flex gap-8">
+                ${can(session,'start') ? `<button class="btn btn-sm btn-success" onclick="vmAction('start',${vm.id})"><span class="material-symbols-rounded">play_arrow</span></button>` : ''}
+                ${can(session,'stop')  ? `<button class="btn btn-sm btn-danger"  onclick="vmAction('stop',${vm.id})"><span class="material-symbols-rounded">stop</span></button>` : ''}
+                <a href="vm-detail.html?id=${vm.id}" class="btn btn-sm btn-secondary"><span class="material-symbols-rounded">open_in_new</span></a>
+              </div>
+            </td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="height:16px"></div>
+
+    <!-- CT table -->
+    <div class="card">
+      <div class="card-header">
+        <span class="material-symbols-rounded" style="font-size:18px;color:#5dd05d">deployed_code</span>
+        <span class="card-title">Container LXC (${cts.length})</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>ID</th><th>Nome</th><th>Stato</th><th>CPU</th><th>RAM</th><th>Disco</th><th>OS</th><th></th>
+          </tr></thead>
+          <tbody>${cts.map(ct=>`<tr>
+            <td class="mono">${ct.id}</td>
+            <td><a href="vm-detail.html?id=${ct.id}" style="color:var(--text);font-weight:600">${ct.name}</a></td>
+            <td><span class="chip ${ct.status==='running'?'chip-running':'chip-stopped'}">${ct.status}</span></td>
+            <td><span style="color:${barColor(ct.cpu)}">${ct.cpu}%</span></td>
+            <td><span style="color:${barColor(ct.mem)}">${ct.mem}%</span></td>
+            <td>${ct.disk} GB</td>
+            <td class="text-muted">${ct.os}</td>
+            <td>
+              <div class="flex gap-8">
+                ${can(session,'start') ? `<button class="btn btn-sm btn-success" onclick="vmAction('start',${ct.id})"><span class="material-symbols-rounded">play_arrow</span></button>` : ''}
+                ${can(session,'stop')  ? `<button class="btn btn-sm btn-danger"  onclick="vmAction('stop',${ct.id})"><span class="material-symbols-rounded">stop</span></button>` : ''}
+                <a href="vm-detail.html?id=${ct.id}" class="btn btn-sm btn-secondary"><span class="material-symbols-rounded">open_in_new</span></a>
+              </div>
+            </td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function vmAction(action, id) {
+  const labels = {start:'avviata',stop:'fermata',reboot:'riavviata',shutdown:'spenta'};
+  const vm = MOCK_DATA.vms.find(v=>v.id===id);
+  if (!vm) return;
+  showToast(`VM ${vm.name} ${labels[action] || action}`, action==='stop'?'warning':'success');
+}
+
+renderNodeSelector();
+renderNode();
+</script>
+</body>
+</html>

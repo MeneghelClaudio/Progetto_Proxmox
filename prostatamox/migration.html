@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Migrazione — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css"/>
+<style>
+.migration-layout { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.node-drop-zone {
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); overflow:hidden; min-height:400px;
+}
+.drop-zone-header {
+  padding:14px 18px; background:var(--surface2);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.drop-zone-header h3 { font-size:14px; font-weight:700; }
+.drop-zone-stats { display:flex; gap:16px; margin-left:auto; }
+.dz-stat { font-size:11px; color:var(--text-muted); }
+.dz-stat b { color:var(--text); }
+.drop-zone-body { padding:12px; min-height:300px; }
+.drop-zone-body.drag-over { background:var(--accent-dim); border:2px dashed var(--accent); }
+.vm-drag-item {
+  display:flex; align-items:center; gap:10px;
+  padding:10px 14px; margin-bottom:6px;
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--radius); cursor:grab;
+  transition:all .15s; user-select:none;
+}
+.vm-drag-item:active { cursor:grabbing; opacity:.7; }
+.vm-drag-item:hover { border-color:var(--border2); }
+.vm-drag-item.dragging { opacity:.4; border-style:dashed; }
+.vm-drag-item .vdi-icon { font-size:18px; flex-shrink:0; }
+.vm-drag-item .vdi-info { flex:1; min-width:0; }
+.vm-drag-item .vdi-name { font-size:13px; font-weight:600; }
+.vm-drag-item .vdi-meta { font-size:11px; color:var(--text-muted); font-family:var(--mono); }
+
+.migration-log {
+  margin-top:20px;
+  background:var(--surface); border:1px solid var(--border);
+  border-radius:var(--radius-lg); padding:16px;
+}
+.log-header { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--text-muted); margin-bottom:10px; }
+.log-scroll { max-height:160px; overflow-y:auto; }
+.log-entry {
+  font-family:var(--mono); font-size:12px; padding:4px 0;
+  border-bottom:1px solid var(--border); display:flex; gap:10px;
+}
+.log-entry:last-child { border-bottom:none; }
+.log-time { color:var(--text-dim); flex-shrink:0; }
+.log-msg  { color:var(--text); }
+.log-msg.success { color:var(--success); }
+.log-msg.error   { color:var(--danger); }
+.log-msg.info    { color:var(--info); }
+
+/* Cluster add area */
+.add-server-card {
+  background:var(--surface2); border:2px dashed var(--border);
+  border-radius:var(--radius-lg); padding:20px;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  text-align:center; gap:10px; cursor:pointer; transition:all .15s;
+  min-height:100px;
+}
+.add-server-card:hover { border-color:var(--accent); background:var(--accent-dim); }
+.add-server-card .material-symbols-rounded { font-size:32px; color:var(--text-dim); }
+.add-server-card:hover .material-symbols-rounded { color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Migrazione VM &amp; Container</h1>
+        <p class="page-subtitle">Trascina VM e container tra i nodi. Drag &amp; drop per migrare.</p>
+      </div>
+    </div>
+
+    <!-- Node drop zones -->
+    <div class="migration-layout" id="migration-layout"></div>
+
+    <!-- Add server to cluster -->
+    <div style="margin-top:20px">
+      <div class="section-title" style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">hub</span>
+        Aggiungi server al cluster
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px" id="cluster-add-grid"></div>
+    </div>
+
+    <!-- Migration log -->
+    <div class="migration-log">
+      <div class="log-header">Log operazioni</div>
+      <div class="log-scroll" id="migration-log-scroll">
+        <div class="log-entry"><span class="log-time">--:--:--</span><span class="log-msg info">Sistema pronto. Trascina VM per avviare una migrazione.</span></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+if (!can(session,'migration')) { showToast('Accesso negato','danger'); setTimeout(()=>location.href='dashboard.html',1500); }
+buildSidebar('migration');
+
+// Build per-node state
+let nodeVMs = {};
+MOCK_DATA.nodes.forEach(n => {
+  nodeVMs[n.id] = MOCK_DATA.vms.filter(v=>v.node===n.id);
+});
+
+let draggedVM = null;
+let dragSourceNode = null;
+
+function barColor(p){ return p>80?'var(--danger)':p>60?'var(--warning)':'var(--success)'; }
+
+function renderLayout() {
+  const el = document.getElementById('migration-layout');
+  el.innerHTML = MOCK_DATA.nodes.map(node => {
+    const vms = nodeVMs[node.id] || [];
+    const vmItems = vms.map(vm => `
+      <div class="vm-drag-item" draggable="true"
+        data-vm-id="${vm.id}" data-source-node="${node.id}"
+        ondragstart="onDragStart(event)"
+        ondragend="onDragEnd(event)">
+        <span class="material-symbols-rounded vdi-icon" style="color:${vm.status==='running'?'var(--success)':'var(--text-dim)'}">
+          ${vm.type==='vm'?'computer':'deployed_code'}
+        </span>
+        <div class="vdi-info">
+          <div class="vdi-name">${vm.name}</div>
+          <div class="vdi-meta">${vm.type.toUpperCase()} · ${vm.id}</div>
+        </div>
+        <span class="chip ${vm.status==='running'?'chip-running':'chip-stopped'}" style="flex-shrink:0">${vm.status}</span>
+        <span class="material-symbols-rounded" style="font-size:16px;color:var(--text-dim)">drag_indicator</span>
+      </div>`).join('');
+    return `<div class="node-drop-zone">
+      <div class="drop-zone-header">
+        <span class="material-symbols-rounded" style="color:${node.status==='running'?'var(--success)':'var(--text-dim)'}">storage</span>
+        <h3>${node.name}</h3>
+        <div class="drop-zone-stats">
+          <span class="dz-stat">CPU: <b style="color:${barColor(node.cpu)}">${node.cpu}%</b></span>
+          <span class="dz-stat">RAM: <b style="color:${barColor(node.mem)}">${node.mem}%</b></span>
+          <span class="dz-stat"><b>${vms.length}</b> macchine</span>
+        </div>
+      </div>
+      <div class="drop-zone-body" data-node-id="${node.id}"
+        ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDrop(event,this)">
+        ${vmItems}
+        ${vms.length===0 ? '<div style="text-align:center;padding:40px;color:var(--text-dim);font-size:12px">Nessuna VM su questo nodo</div>' : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function onDragStart(e) {
+  draggedVM    = parseInt(e.currentTarget.dataset.vmId);
+  dragSourceNode = e.currentTarget.dataset.sourceNode;
+  e.currentTarget.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+function onDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.drop-zone-body').forEach(z=>z.classList.remove('drag-over'));
+}
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+function onDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+function onDrop(e, zone) {
+  e.preventDefault();
+  zone.classList.remove('drag-over');
+  const targetNode = zone.dataset.nodeId;
+  if (!draggedVM || targetNode === dragSourceNode) return;
+  const vm = MOCK_DATA.vms.find(v=>v.id===draggedVM);
+  if (!vm) return;
+  nodeVMs[dragSourceNode] = (nodeVMs[dragSourceNode]||[]).filter(v=>v.id!==draggedVM);
+  vm.node = targetNode;
+  if (!nodeVMs[targetNode]) nodeVMs[targetNode] = [];
+  nodeVMs[targetNode].push(vm);
+  renderLayout();
+  addLog(`Migrazione completata: ${vm.name} (${vm.type.toUpperCase()}) → ${targetNode}`, 'success');
+  showToast(`${vm.name} migrata su ${targetNode}`, 'success');
+  draggedVM = null; dragSourceNode = null;
+}
+
+function addLog(msg, type='info') {
+  const scroll = document.getElementById('migration-log-scroll');
+  const now = new Date().toLocaleTimeString('it-IT');
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  div.innerHTML = `<span class="log-time">${now}</span><span class="log-msg ${type}">${msg}</span>`;
+  scroll.insertBefore(div, scroll.firstChild);
+}
+
+// Cluster add section
+function renderClusterAdd() {
+  const el = document.getElementById('cluster-add-grid');
+  el.innerHTML = MOCK_DATA.clusters.map(cl=>`
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">${cl.name}</div>
+      <div class="add-server-card" onclick="addServerToCluster('${cl.id}','${cl.name}')">
+        <span class="material-symbols-rounded">add_circle</span>
+        <div style="font-size:13px;font-weight:600">Aggiungi server</div>
+        <div style="font-size:11px;color:var(--text-muted)">Trascina o clicca per aggiungere</div>
+      </div>
+    </div>`).join('');
+}
+
+function addServerToCluster(clusterId, clusterName) {
+  const ip = prompt('Indirizzo IP o hostname del nuovo nodo:');
+  if (!ip) return;
+  showToast(`Nodo "${ip}" aggiunto a ${clusterName} (simulato)`, 'success');
+  addLog(`Aggiunto nodo ${ip} al cluster ${clusterName}`, 'success');
+}
+
+renderLayout();
+renderClusterAdd();
+</script>
+</body>
+</html>
