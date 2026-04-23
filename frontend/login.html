@@ -2,55 +2,203 @@
 <html lang="it">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Proxmox Manager · Login</title>
-<link rel="stylesheet" href="/css/app.css" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ProxMox Manager — Login</title>
+<link rel="stylesheet" href="shared.css" />
 <style>
-  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-  .login-card { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 28px; }
-  .login-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
-  .login-sub { color: var(--text-muted); margin-bottom: 18px; }
-  .login-btn { width: 100%; margin-top: 10px; }
+  body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:var(--bg); overflow:hidden; }
+
+  /* Animated background grid */
+  .bg-grid {
+    position:fixed; inset:0; z-index:0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 40px 40px;
+    opacity:.35;
+    mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 40%, transparent 100%);
+  }
+  .bg-glow {
+    position:fixed; inset:0; z-index:0;
+    background: radial-gradient(ellipse 60% 50% at 50% 60%, rgba(232,101,26,.12) 0%, transparent 70%);
+  }
+
+  .login-card {
+    position:relative; z-index:1;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius-xl); padding:40px;
+    width:100%; max-width:420px;
+    box-shadow: 0 0 0 1px var(--border), var(--shadow-lg);
+  }
+  .login-logo {
+    display:flex; align-items:center; gap:12px; margin-bottom:32px;
+  }
+  .login-logo-icon {
+    width:44px; height:44px; border-radius:12px;
+    background:var(--accent); display:flex; align-items:center; justify-content:center;
+  }
+  .login-logo-icon span { font-size:26px; color:#fff; }
+  .login-logo-text { line-height:1.1; }
+  .login-logo-text h1 { font-size:18px; font-weight:800; color:var(--text); letter-spacing:-.3px; }
+  .login-logo-text p  { font-size:12px; color:var(--text-muted); }
+
+  .login-title { font-size:22px; font-weight:700; margin-bottom:6px; }
+  .login-sub   { font-size:13px; color:var(--text-muted); margin-bottom:28px; }
+
+  .input-wrap {
+    position:relative;
+  }
+  .input-wrap .material-symbols-rounded {
+    position:absolute; left:12px; top:50%; transform:translateY(-50%);
+    font-size:18px; color:var(--text-dim); pointer-events:none;
+  }
+  .input-wrap input {
+    width:100%; padding:11px 14px 11px 40px;
+    border-radius:var(--radius);
+    background:var(--surface2); border:1px solid var(--border);
+    color:var(--text); font-family:var(--font); font-size:14px;
+    transition:border-color .15s; outline:none;
+  }
+  .input-wrap input:focus { border-color:var(--accent); }
+  .input-wrap input::placeholder { color:var(--text-dim); }
+  .eye-btn {
+    position:absolute; right:10px; top:50%; transform:translateY(-50%);
+    background:none; border:none; cursor:pointer;
+    color:var(--text-dim); display:flex; align-items:center;
+  }
+  .eye-btn:hover { color:var(--text-muted); }
+
+  .login-btn {
+    width:100%; padding:12px;
+    background:var(--accent); color:#fff;
+    border:none; border-radius:var(--radius);
+    font-family:var(--font); font-size:15px; font-weight:700;
+    cursor:pointer; transition:background .15s;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    margin-top:8px;
+  }
+  .login-btn:hover { background:var(--accent-h); }
+  .login-btn:disabled { opacity:.5; cursor:not-allowed; }
+
+  .error-msg {
+    background:var(--danger-dim); border:1px solid var(--danger);
+    border-radius:var(--radius); padding:10px 14px;
+    font-size:13px; color:var(--danger);
+    display:flex; align-items:center; gap:8px; margin-bottom:16px;
+  }
+  .error-msg.hidden { display:none; }
+
+  .spinner {
+    width:18px; height:18px; border:2px solid rgba(255,255,255,.3);
+    border-top-color:#fff; border-radius:50%;
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
-  <div class="login-card">
-    <h1 class="login-title">Accedi</h1>
-    <p class="login-sub">ProxMox Manager</p>
-    <form id="loginForm" autocomplete="on">
-      <div style="display:grid;gap:10px">
-        <input name="username" required autocomplete="username" class="form-input" placeholder="Username" />
-        <input name="password" type="password" required autocomplete="current-password" class="form-input" placeholder="Password" />
-      </div>
-      <button class="btn btn-primary login-btn">Accedi</button>
-      <p id="loginError" style="color:var(--danger);margin-top:10px" class="hidden"></p>
-    </form>
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+
+<div class="login-card">
+  <div class="login-logo">
+    <div class="login-logo-icon">
+      <span class="material-symbols-rounded ms-fill">dns</span>
+    </div>
+    <div class="login-logo-text">
+      <h1>ProxMox Manager</h1>
+      <p>Infrastructure Control Panel</p>
+    </div>
   </div>
 
-<script type="module">
-import { api, saveToken } from '/js/api.js';
+  <h2 class="login-title">Accedi</h2>
+  <p class="login-sub">Inserisci le tue credenziali per continuare</p>
 
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const f = new FormData(e.target);
-  const body = new URLSearchParams({ username: f.get('username'), password: f.get('password') });
-  const err = document.getElementById('loginError');
-  err.classList.add('hidden');
-  try {
-    const r = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body,
-    });
-    if (!r.ok) throw new Error((await r.json()).detail || 'Errore');
-    const data = await r.json();
-    saveToken(data.access_token, data.username, data.role, data.is_admin);
-    location.href = '/index.html';
-  } catch (ex) {
-    err.textContent = ex.message;
-    err.classList.remove('hidden');
-  }
-});
+  <form id="login-form" novalidate>
+    <div id="error-msg" class="error-msg hidden">
+      <span class="material-symbols-rounded" style="font-size:16px">error</span>
+      <span id="error-text">Credenziali non valide.</span>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Username</label>
+      <div class="input-wrap">
+        <span class="material-symbols-rounded">person</span>
+        <input type="text" id="username" placeholder="username" autocomplete="username" />
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Password</label>
+      <div class="input-wrap">
+        <span class="material-symbols-rounded">lock</span>
+        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
+        <button type="button" class="eye-btn" id="toggle-pw">
+          <span class="material-symbols-rounded" style="font-size:18px" id="eye-icon">visibility</span>
+        </button>
+      </div>
+    </div>
+    <button type="submit" class="login-btn" id="login-btn">
+      <span id="btn-label">Accedi</span>
+    </button>
+  </form>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+  initTheme();
+  // If already logged in, redirect
+  if (getSession()) window.location.href = 'dashboard.html';
+
+  const form   = document.getElementById('login-form');
+  const errBox = document.getElementById('error-msg');
+  const errTxt = document.getElementById('error-text');
+  const btn    = document.getElementById('login-btn');
+  const lbl    = document.getElementById('btn-label');
+
+  document.getElementById('toggle-pw').addEventListener('click', () => {
+    const pw = document.getElementById('password');
+    const icon = document.getElementById('eye-icon');
+    if (pw.type === 'password') { pw.type = 'text'; icon.textContent = 'visibility_off'; }
+    else { pw.type = 'password'; icon.textContent = 'visibility'; }
+  });
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    errBox.classList.add('hidden');
+    const u = document.getElementById('username').value.trim();
+    const p = document.getElementById('password').value;
+    if (!u || !p) {
+      errTxt.textContent = 'Inserisci username e password.';
+      errBox.classList.remove('hidden'); return;
+    }
+    btn.disabled = true;
+    lbl.innerHTML = '<div class="spinner"></div>';
+    await new Promise(r => setTimeout(r, 250));
+    try {
+      const payload = new URLSearchParams({ username: u, password: p });
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: payload,
+      });
+      if (!res.ok) throw new Error('Username o password non corretti.');
+      const data = await res.json();
+      localStorage.setItem('pmx_token', data.access_token);
+      setSession({
+        username: data.username,
+        name: data.username,
+        role: data.role,
+        level: data.role,
+      });
+      window.location.href = 'dashboard.html';
+    } catch (e) {
+      errTxt.textContent = e.message || 'Username o password non corretti.';
+      errBox.classList.remove('hidden');
+      btn.disabled = false;
+      lbl.textContent = 'Accedi';
+    }
+  });
 </script>
 </body>
 </html>

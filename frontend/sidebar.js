@@ -4,7 +4,7 @@ function buildSidebar(activePage) {
   const session = requireAuth();
   if (!session) return;
 
-  const data = MOCK_DATA;
+  const data = LIVE_DATA.tree ? mapTreeToFrontendData(LIVE_DATA.tree) : { clusters: [], nodes: [], vms: [], backupServers: [] };
 
   const sidebarHTML = `
     <button class="sidebar-toggle" id="sidebar-toggle-btn" title="Toggle sidebar">
@@ -71,6 +71,27 @@ function buildSidebar(activePage) {
   const shell = document.getElementById('app-shell');
   initSidebarResize(document.getElementById('sidebar'), shell);
   initSidebarToggle(shell);
+}
+
+function mapTreeToFrontendData(tree) {
+  const clusterName = tree?.cluster?.name || 'cluster';
+  const nodes = (tree?.nodes || []).map(n => ({
+    id: n.node,
+    name: n.node,
+    status: n.status === 'online' ? 'running' : 'stopped',
+  }));
+  const vms = [];
+  (tree?.nodes || []).forEach(n => {
+    (n.vms || []).forEach(v => vms.push({ id: v.vmid, name: v.name || `vm-${v.vmid}`, node: n.node, type: 'vm', status: v.status || 'stopped' }));
+    (n.cts || []).forEach(c => vms.push({ id: c.vmid, name: c.name || `ct-${c.vmid}`, node: n.node, type: 'ct', status: c.status || 'stopped' }));
+  });
+  const backupServers = (tree?.backup_targets || []).map((b, i) => ({ id: `b${i}`, name: `${b.storage}@${b.node}` }));
+  return {
+    clusters: [{ id: 'c1', name: clusterName, nodes: nodes.map(n => n.id), status: tree?.cluster?.quorate ? 'ok' : 'degraded' }],
+    nodes,
+    vms,
+    backupServers,
+  };
 }
 
 function buildTreeHTML(data, session) {

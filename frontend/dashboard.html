@@ -126,7 +126,12 @@
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-buildSidebar('dashboard');
+async function bootstrap() {
+  await loadTreeData();
+  buildSidebar('dashboard');
+  renderOverview();
+  switchTab('nodes');
+}
 
 // Inject add button for admin
 if (can(session,'add_server')) {
@@ -138,7 +143,7 @@ if (can(session,'add_server')) {
 
 // Overview stats
 function renderOverview() {
-  const d = MOCK_DATA;
+  const d = mapData();
   const totalVMs = d.vms.filter(v=>v.type==='vm').length;
   const totalCTs = d.vms.filter(v=>v.type==='ct').length;
   const running  = d.vms.filter(v=>v.status==='running').length;
@@ -179,8 +184,9 @@ function barColor(pct) {
 }
 
 function renderNodes() {
-  return `<div class="node-grid">${MOCK_DATA.nodes.map(node => {
-    const vms = MOCK_DATA.vms.filter(v=>v.node===node.id);
+  const data = mapData();
+  return `<div class="node-grid">${data.nodes.map(node => {
+    const vms = data.vms.filter(v=>v.node===node.id);
     const vmList = vms.slice(0,6).map(v=>`
       <a href="vm-detail.html?id=${v.id}" class="chip ${v.status==='running'?'chip-running':'chip-stopped'}" style="text-decoration:none">
         <span class="material-symbols-rounded" style="font-size:12px">${v.type==='vm'?'computer':'deployed_code'}</span>
@@ -210,13 +216,14 @@ function renderNodes() {
 }
 
 function renderClusters() {
-  return `<div class="node-grid">${MOCK_DATA.clusters.map(cl=>{
-    const nodes = MOCK_DATA.nodes.filter(n=>cl.nodes.includes(n.id));
+  const data = mapData();
+  return `<div class="node-grid">${data.clusters.map(cl=>{
+    const nodes = data.nodes.filter(n=>cl.nodes.includes(n.id));
     const pills = nodes.map(n=>`
       <a href="node-detail.html?id=${n.id}" class="cluster-node-pill">
         <span class="status-dot ${n.status==='running'?'running':'stopped'}"></span>
         ${n.name}
-        <span class="text-xs text-muted">${MOCK_DATA.vms.filter(v=>v.node===n.id).length} VM/CT</span>
+        <span class="text-xs text-muted">${data.vms.filter(v=>v.node===n.id).length} VM/CT</span>
       </a>`).join('');
     return `<div class="cluster-card">
       <div class="cluster-header">
@@ -230,7 +237,8 @@ function renderClusters() {
 }
 
 function renderBackup() {
-  return `<div class="node-grid">${MOCK_DATA.backupServers.map(bs=>{
+  const data = mapData();
+  return `<div class="node-grid">${data.backupServers.map(bs=>{
     const pct = Math.round(bs.diskUsed/bs.diskTotal*100);
     const total = Math.round(bs.diskTotal/1024);
     const used  = Math.round(bs.diskUsed/1024);
@@ -257,8 +265,34 @@ function renderBackup() {
   }).join('')}</div>`;
 }
 
-renderOverview();
-switchTab('nodes');
+function mapData() {
+  const tree = LIVE_DATA.tree || {};
+  const nodes = (tree.nodes || []).map(n => ({
+    id: n.node,
+    name: n.node,
+    status: n.status === 'online' ? 'running' : 'stopped',
+    cpu: Math.round((n.cpu || 0) * 100),
+    mem: n.maxmem ? Math.round(((n.mem || 0) / n.maxmem) * 100) : 0,
+    disk: n.maxdisk ? Math.round(((n.disk || 0) / n.maxdisk) * 100) : 0,
+    uptime: n.uptime || '-',
+  }));
+  const vms = [];
+  (tree.nodes || []).forEach(n => {
+    (n.vms || []).forEach(v => vms.push({ id: v.vmid, name: v.name || `vm-${v.vmid}`, node: n.node, type: 'vm', status: v.status || 'stopped' }));
+    (n.cts || []).forEach(c => vms.push({ id: c.vmid, name: c.name || `ct-${c.vmid}`, node: n.node, type: 'ct', status: c.status || 'stopped' }));
+  });
+  const clusters = [{ id: 'c1', name: tree.cluster?.name || 'cluster', nodes: nodes.map(n => n.id), status: tree.cluster?.quorate ? 'ok' : 'degraded' }];
+  const backupServers = (tree.backup_targets || []).map((b, i) => ({
+    id: `backup-${i}`,
+    name: `${b.storage}@${b.node}`,
+    status: 'running',
+    diskTotal: b.total || 0,
+    diskUsed: b.used || 0,
+  }));
+  return { nodes, vms, clusters, backupServers };
+}
+
+bootstrap();
 </script>
 </body>
 </html>
