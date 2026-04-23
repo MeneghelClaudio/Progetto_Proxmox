@@ -3,73 +3,56 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Proxmox Manager</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<title>Dashboard — ProxMox Manager</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <link rel="stylesheet" href="/css/app.css" />
 </head>
-<body class="bg-slate-900 text-slate-100 h-screen overflow-hidden">
-
-<!-- =================== Top bar =================== -->
-<header class="h-12 bg-slate-950 border-b border-slate-800 flex items-center px-4 gap-4">
-  <div class="flex items-center gap-2 font-semibold">
-    <span>🧊</span><span>Proxmox Manager</span>
-  </div>
-
-  <select id="credSelect"
-    class="ml-4 bg-slate-900 border border-slate-800 rounded px-2 py-1 text-sm">
-    <option value="">Seleziona cluster…</option>
-  </select>
-  <button id="addCredBtn" class="text-xs bg-sky-600 hover:bg-sky-500 px-2 py-1 rounded">
-    + Aggiungi
-  </button>
-
-  <div class="ml-auto flex items-center gap-3 text-sm">
-    <span id="userLabel" class="text-slate-400"></span>
-    <button id="logoutBtn" class="text-slate-400 hover:text-slate-100">Esci</button>
-  </div>
-</header>
-
-<!-- =================== 3 panels =================== -->
-<div class="grid grid-cols-[280px_1fr_420px] h-[calc(100vh-48px-40px)]">
-
-  <!-- Sidebar tree -->
-  <aside id="sidebar" class="bg-slate-950/60 border-r border-slate-800 overflow-y-auto p-2 text-sm">
-    <div id="tree" class="space-y-0.5"></div>
-  </aside>
-
-  <!-- Main view (overview + tabs) -->
-  <main class="overflow-y-auto p-4">
-    <nav class="flex gap-1 mb-3 border-b border-slate-800 text-sm">
-      <button data-tab="phys"    class="tab-btn px-3 py-2 border-b-2 border-sky-500 text-sky-300">🖥️ Server fisici</button>
-      <button data-tab="cluster" class="tab-btn px-3 py-2 border-b-2 border-transparent text-slate-400">🧩 Cluster</button>
-      <button data-tab="backup"  class="tab-btn px-3 py-2 border-b-2 border-transparent text-slate-400">💾 Backup</button>
-    </nav>
-
-    <section id="tab-phys"    class="tab-pane"></section>
-    <section id="tab-cluster" class="tab-pane hidden"></section>
-    <section id="tab-backup"  class="tab-pane hidden"></section>
-  </main>
-
-  <!-- Right detail -->
-  <aside id="detail" class="bg-slate-950/60 border-l border-slate-800 overflow-y-auto">
-    <div class="p-4 text-slate-500 text-sm">
-      Seleziona un elemento dall'albero per vederne i dettagli.
+<body>
+<div class="app-shell-main">
+  <header class="topbar">
+    <div class="topbar-brand">
+      <div class="brand-icon">P</div>
+      <span>ProxMox Manager</span>
     </div>
-  </aside>
+    <select id="credSelect" class="form-input topbar-select">
+      <option value="">Seleziona cluster…</option>
+    </select>
+    <button id="addCredBtn" class="btn btn-primary btn-sm">+ Aggiungi</button>
+    <button id="usersBtn" class="btn btn-secondary btn-sm hidden">Utenti</button>
+    <div class="topbar-sep"></div>
+    <span id="userLabel" class="text-muted"></span>
+    <button id="logoutBtn" class="btn btn-secondary btn-sm">Esci</button>
+  </header>
+
+  <div class="content-grid">
+    <aside id="sidebar" class="sidebar-panel">
+      <div id="tree"></div>
+    </aside>
+
+    <main class="main">
+      <div class="tabs">
+        <button data-tab="phys" class="tab-btn tab active">Server fisici</button>
+        <button data-tab="cluster" class="tab-btn tab">Cluster</button>
+        <button data-tab="backup" class="tab-btn tab">Backup</button>
+      </div>
+      <section id="tab-phys" class="tab-pane"></section>
+      <section id="tab-cluster" class="tab-pane hidden"></section>
+      <section id="tab-backup" class="tab-pane hidden"></section>
+    </main>
+
+    <aside id="detail" class="detail-panel">
+      <div class="padded text-muted">Seleziona un elemento dall'albero per vederne i dettagli.</div>
+    </aside>
+  </div>
+
+  <footer id="taskbar" class="taskbar">
+    <span class="text-muted">Operazioni:</span>
+    <div id="taskbarItems" class="taskbar-items"></div>
+    <span id="taskbarIdle" class="text-muted">nessuna in corso</span>
+  </footer>
 </div>
 
-<!-- =================== Bottom task bar =================== -->
-<footer id="taskbar" class="h-10 bg-slate-950 border-t border-slate-800 px-3
-                            flex items-center gap-3 overflow-x-auto text-xs">
-  <span class="text-slate-500 shrink-0">Operazioni:</span>
-  <div id="taskbarItems" class="flex gap-3"></div>
-  <span id="taskbarIdle" class="text-slate-600 italic">nessuna in corso</span>
-</footer>
-
-<!-- Generic modal host -->
 <div id="modalRoot"></div>
-
 <script type="module" src="/js/main.js"></script>
 </body>
 </html>

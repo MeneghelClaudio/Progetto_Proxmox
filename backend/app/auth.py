@@ -48,7 +48,7 @@ def get_current_user(
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if not user.is_admin:
+    if user.role != "admin" and not user.is_admin:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 

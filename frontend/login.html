@@ -4,39 +4,27 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Proxmox Manager · Login</title>
-<script src="https://cdn.tailwindcss.com"></script>
 <link rel="stylesheet" href="/css/app.css" />
+<style>
+  body { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+  .login-card { width: 100%; max-width: 420px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-xl); padding: 28px; }
+  .login-title { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  .login-sub { color: var(--text-muted); margin-bottom: 18px; }
+  .login-btn { width: 100%; margin-top: 10px; }
+</style>
 </head>
-<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center">
-  <div class="w-full max-w-sm bg-slate-800 rounded-xl shadow-xl p-8 border border-slate-700">
-    <div class="text-center mb-6">
-      <div class="text-4xl">🧊</div>
-      <h1 class="text-xl font-semibold mt-2">Proxmox Manager</h1>
-      <p class="text-slate-400 text-sm mt-1">Accedi per gestire i tuoi cluster</p>
-    </div>
-
-    <form id="loginForm" class="space-y-3" autocomplete="on">
-      <div>
-        <label class="block text-xs text-slate-400 mb-1">Utente</label>
-        <input name="username" required autocomplete="username"
-               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2
-                      focus:outline-none focus:ring-2 focus:ring-sky-500" />
+<body>
+  <div class="login-card">
+    <h1 class="login-title">Accedi</h1>
+    <p class="login-sub">ProxMox Manager</p>
+    <form id="loginForm" autocomplete="on">
+      <div style="display:grid;gap:10px">
+        <input name="username" required autocomplete="username" class="form-input" placeholder="Username" />
+        <input name="password" type="password" required autocomplete="current-password" class="form-input" placeholder="Password" />
       </div>
-      <div>
-        <label class="block text-xs text-slate-400 mb-1">Password</label>
-        <input name="password" type="password" required autocomplete="current-password"
-               class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2
-                      focus:outline-none focus:ring-2 focus:ring-sky-500" />
-      </div>
-      <button class="w-full bg-sky-600 hover:bg-sky-500 rounded-lg py-2 font-medium transition">
-        Accedi
-      </button>
-      <p id="loginError" class="text-red-400 text-sm text-center hidden"></p>
+      <button class="btn btn-primary login-btn">Accedi</button>
+      <p id="loginError" style="color:var(--danger);margin-top:10px" class="hidden"></p>
     </form>
-
-    <p class="text-xs text-slate-500 text-center mt-6">
-      Primo avvio → admin / admin (cambia subito la password)
-    </p>
   </div>
 
 <script type="module">
@@ -56,7 +44,7 @@ document.getElementById('loginForm').addEventListener('submit', async (e) => {
     });
     if (!r.ok) throw new Error((await r.json()).detail || 'Errore');
     const data = await r.json();
-    saveToken(data.access_token, data.username);
+    saveToken(data.access_token, data.username, data.role, data.is_admin);
     location.href = '/index.html';
   } catch (ex) {
     err.textContent = ex.message;

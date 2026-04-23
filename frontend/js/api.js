@@ -1,17 +1,25 @@
 // Thin fetch wrapper + bearer token persistence
 const TOKEN_KEY  = 'pmx_token';
 const USER_KEY   = 'pmx_user';
+const ROLE_KEY   = 'pmx_role';
+const ADMIN_KEY  = 'pmx_admin';
 
-export function saveToken(token, username) {
+export function saveToken(token, username, role = 'junior', isAdmin = false) {
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY,  username);
+  localStorage.setItem(ROLE_KEY, role);
+  localStorage.setItem(ADMIN_KEY, isAdmin ? '1' : '0');
 }
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(ROLE_KEY);
+  localStorage.removeItem(ADMIN_KEY);
 }
 export const getToken    = () => localStorage.getItem(TOKEN_KEY);
 export const getUsername = () => localStorage.getItem(USER_KEY);
+export const getRole     = () => localStorage.getItem(ROLE_KEY) || 'junior';
+export const isAdmin     = () => localStorage.getItem(ADMIN_KEY) === '1';
 
 export async function api(path, { method = 'GET', body = null, headers = {} } = {}) {
   const token = getToken();

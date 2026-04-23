@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Utenti — ProxMox Manager</title>
+  <link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+  <div class="app-shell-main">
+    <header class="topbar">
+      <div class="topbar-brand"><div class="brand-icon">P</div><span>Gestione Utenti</span></div>
+      <div class="topbar-sep"></div>
+      <button id="backBtn" class="btn btn-secondary btn-sm">Dashboard</button>
+      <button id="logoutBtn" class="btn btn-secondary btn-sm">Esci</button>
+    </header>
+    <main class="main" style="grid-row:2 / span 2;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h1 style="font-size:20px">Utenti e ruoli</h1>
+        <button id="addBtn" class="btn btn-primary">Aggiungi utente</button>
+      </div>
+      <div id="usersList"></div>
+      <div id="addWrap" class="hidden" style="margin-top:16px;max-width:460px;">
+        <h3 style="margin-bottom:10px;">Nuovo utente</h3>
+        <form id="addForm" style="display:grid;gap:10px;">
+          <input class="form-input" name="username" placeholder="Username" required />
+          <input class="form-input" name="password" type="password" placeholder="Password" required />
+          <select class="form-input" name="role">
+            <option value="admin">admin</option>
+            <option value="senior">senior</option>
+            <option value="junior" selected>junior</option>
+          </select>
+          <div style="display:flex;gap:8px;">
+            <button class="btn btn-primary" type="submit">Salva</button>
+            <button class="btn btn-secondary" id="cancelAdd" type="button">Annulla</button>
+          </div>
+        </form>
+      </div>
+    </main>
+  </div>
+  <script type="module" src="/js/users.js"></script>
+</body>
+</html>

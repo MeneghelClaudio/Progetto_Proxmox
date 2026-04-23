@@ -9,6 +9,7 @@ import os
 
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from .config import settings, ensure_fernet_key
 from .database import Base, engine
@@ -41,6 +42,10 @@ app.add_middleware(
 def on_startup():
     ensure_fernet_key()       # generate + persist key on first run
     Base.metadata.create_all(bind=engine)  # no-op if init.sql already ran
+    with engine.begin() as conn:
+        # Lightweight compatibility migration for existing DBs.
+        conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'junior'"))
+        conn.execute(text("UPDATE users SET role='admin' WHERE is_admin=1 AND (role IS NULL OR role='')"))
 
 
 @app.get("/api/health")

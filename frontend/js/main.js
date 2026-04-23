@@ -1,7 +1,7 @@
 // App entry point. Wires: auth guard, credential picker, tree, detail panel,
 // overview tabs, task bar, drag & drop migration.
 
-import { api, getToken, getUsername, clearToken } from './api.js';
+import { api, getToken, getUsername, getRole, clearToken } from './api.js';
 import { loadTree } from './tree.js';
 import { bindDetail, refreshCredId } from './detail.js';
 import { bindOverview } from './overview.js';
@@ -12,9 +12,16 @@ import { openModal } from './modal.js';
 if (!getToken()) location.href = '/login.html';
 
 document.getElementById('userLabel').textContent = getUsername() || '';
+const role = getRole();
+document.getElementById('userLabel').textContent = `${getUsername() || ''} (${role})`;
 document.getElementById('logoutBtn').addEventListener('click', () => {
   clearToken(); location.href = '/login.html';
 });
+if (role === 'admin') {
+  const usersBtn = document.getElementById('usersBtn');
+  usersBtn.classList.remove('hidden');
+  usersBtn.addEventListener('click', () => { location.href = '/users.html'; });
+}
 
 // --- Credential picker ---
 const credSelect = document.getElementById('credSelect');

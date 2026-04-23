@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     id            INT AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(64)  NOT NULL UNIQUE,
     password_hash VARCHAR(255) NOT NULL,               -- bcrypt hash (never stored in clear)
+    role          VARCHAR(16)  NOT NULL DEFAULT 'junior',
     is_admin      TINYINT(1)   NOT NULL DEFAULT 0,
     created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -44,6 +45,6 @@ CREATE TABLE IF NOT EXISTS migration_tasks (
 
 -- Bootstrap admin user (username: admin / password: admin) - CHANGE ON FIRST LOGIN
 -- Hash below is bcrypt($2b$12$...) of "admin", verified at generation time.
-INSERT INTO users (username, password_hash, is_admin)
-VALUES ('admin', '$2b$12$m2Y35Dzo4f.5385geIPrfuUifbXwOkcatiMyaI9WvANlGmeji3a1S', 1)
+INSERT INTO users (username, password_hash, role, is_admin)
+VALUES ('admin', '$2b$12$m2Y35Dzo4f.5385geIPrfuUifbXwOkcatiMyaI9WvANlGmeji3a1S', 'admin', 1)
 ON DUPLICATE KEY UPDATE username=username;
