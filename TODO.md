@@ -1,0 +1,9 @@
+- [ ] mostra password in login non funziona (da implementare)
+- [ ] bottone creazione server (-> dashboard) errore di visualizzazione simbolo+scritta
+- [ ] manca creazione cluster
+- [ ] cambiare info server + ip al posto di eliminarlo
+- [ ] se si preme invio invia le info automaticamente (es. quando crei un server)
+- [ ] uso di server: si vede soltanto il server attivo (si vedono nei nodi ma scomodo)
+- [ ] nella parte di sinistra, la parte "insfrastruttura" non si può interagire (non si espande e collassa niente)
+- [ ] nella voce "vm e container" non si possono aggiungere vm o container
+- [ ] dischi per singolo server: si vede %disco ma non si sa quanti dischi e da quanti GB

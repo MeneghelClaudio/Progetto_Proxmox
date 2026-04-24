@@ -1,163 +1,207 @@
-# ProxMox Manager
+# Proxmox Manager
 
-Control panel per Proxmox VE con backend FastAPI + MariaDB e frontend vanilla JS/CSS ispirato a Proxmox (tema dark, accent arancione, sidebar con albero cluster).
+Web app per la gestione centralizzata di cluster Proxmox VE, stile VMware
+Workstation: albero delle risorse, grafici real-time a 1 Hz su finestra di 30 min,
+azioni VM/CT con doppia conferma, snapshot, backup, e migrazione drag & drop con
+task bar di progresso.
 
-## Architettura
+**Stack**
 
-```
-┌─────────────┐    ┌──────────────┐    ┌──────────────┐
-│   Browser   │───▶│  nginx :8027 │───▶│ FastAPI :8000│
-└─────────────┘    │   (frontend) │    │  (backend)   │
-                   └──────────────┘    └──────┬───────┘
-                                              │
-                                    ┌─────────┼──────────┐
-                                    │                    │
-                                    ▼                    ▼
-                              ┌──────────┐       ┌────────────┐
-                              │ MariaDB  │       │  Proxmox   │
-                              │  :3306   │       │  API :8006 │
-                              └──────────┘       └────────────┘
-```
+- **Backend**: Python 3.12 + FastAPI + [proxmoxer](https://github.com/proxmoxer/proxmoxer)
+- **Frontend**: HTML + Tailwind (CDN) + Chart.js + vanilla ES6 modules
+- **DB**: MariaDB 11 (users, credenziali cifrate, task di migrazione)
+- **Deployment**: Docker Compose, esposto su `:8027`
 
-- **backend** — FastAPI con JWT auth, SQLAlchemy/MariaDB, Fernet encryption per le credenziali Proxmox, WebSocket per le live stats
-- **frontend** — HTML/CSS/JS vanilla (nessun framework), identico nello stile al mockup `prostatamox` ma alimentato da dati reali del backend
-- **db** — MariaDB 11, schema inizializzato da `db/init.sql` al primo avvio
+---
 
-## Ruoli
-
-Tre livelli gerarchici, gestibili dalla pagina **Utenti &amp; Permessi** (solo admin):
-
-| Ruolo  | Dashboard / visualizza | Start/Stop/Reboot | Clone / Migrate / Snapshot / Backup | Delete VM / snapshot / user mgmt | Aggiungi/Rimuovi server |
-|--------|:-:|:-:|:-:|:-:|:-:|
-| **admin**  | ✔ | ✔ | ✔ | ✔ | ✔ / ✔ |
-| **senior** | ✔ | ✔ | ✔ | ✘ | ✔ / ✘ |
-| **junior** | ✔ | ✘ | ✘ | ✘ | ✘ / ✘ |
-
-I controlli sono applicati **sia** in frontend (pulsanti nascosti) **sia** nel backend (dipendenze `require_senior` / `require_admin`). Il frontend è solo UX: il backend è la fonte di verità.
-
-## Avvio rapido
+## Quick start
 
 ```bash
-# 1. Clona e configura
+git clone <repo> proxmox-manager
+cd proxmox-manager
 cp .env.example .env
-# (opzionale) modifica JWT_SECRET e le password DB in .env
-
-# 2. Avvia
+# modifica .env: password DB, JWT_SECRET, (opz.) FERNET_KEY
 docker compose up -d --build
-
-# 3. Apri il browser
-open http://localhost:8027
+# apri http://localhost:8027
+# login iniziale:  admin / admin   → cambiala subito
 ```
 
-**Credenziali iniziali**: `admin` / `admin` → **cambia la password al primo login** dalla pagina Utenti.
+### Generare una chiave Fernet stabile (consigliato in produzione)
 
-## Primo utilizzo
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-1. Login come `admin`
-2. Vai su **Server Proxmox** → **Aggiungi server**: inserisci host, porta (8006), utente PVE (es. `root@pam`), password del cluster
-3. Ritorna alla **Dashboard**: vedrai nodi, VM, container e storage del cluster reale
-4. Crea gli utenti `senior` / `junior` dalla pagina **Utenti &amp; Permessi**
+Mettila in `FERNET_KEY=` nel file `.env`. Se la lasci vuota, la chiave viene
+generata al primo avvio e persiste nel volume `backend_data` (`/data/fernet.key`).
+Se la chiave cambia, le credenziali Proxmox salvate **non saranno più
+decifrabili** e dovrai inserirle di nuovo — quindi conservala.
+
+---
+
+## Cosa offre la UI
+
+- **Sidebar ad albero** con Cluster 🧩, Nodi fisici 🖥️, VM 🧊, CT 📦, Storage
+  💽, Backup storage 💾. Le VM/CT sono trascinabili su un altro nodo per
+  avviare una migrazione.
+- **Main view post-login** con tre tab: *Server fisici* (card con CPU/RAM),
+  *Cluster* (stato, quorum, versione), *Backup* (storage con percentuali di
+  occupazione).
+- **Pannello destro** per la risorsa selezionata:
+  - CPU e RAM live in tempo reale via **WebSocket a 1 Hz**, finestra di
+    **30 minuti scorrevole**.
+  - Azioni: **Start / Stop / Shutdown / Reboot / Clone / Delete**.
+  - Clone e Delete mostrano un **modal di conferma con nome**: devi digitare
+    il nome corrente della VM/CT, stile GitHub-delete-repo.
+  - **History** con tutti gli snapshot (data, ora, descrizione) + pulsanti
+    rollback ed eliminazione.
+- **Task bar in fondo**: mostra le migrazioni in corso con percentuale di
+  completamento (derivata parsando il log del task PVE).
+- **Creazione VM e CT con form dinamici**: selezionando un nodo fisico
+  compaiono i pulsanti **"+ Nuova VM"** e **"+ Nuovo Container"**. Il form si
+  popola con le risorse reali del nodo (prossimo VMID libero, storage
+  filtrati per content type, bridge di rete, ISO disponibili, template LXC)
+  interrogando `GET /api/clusters/{cid}/nodes/{node}/resources`.
+
+---
+
+## Sicurezza
+
+- Le password di Proxmox **non sono mai salvate in chiaro**: vengono cifrate
+  con **Fernet** (AES-128-CBC + HMAC-SHA256) al momento del `POST
+  /api/credentials` e decifrate in RAM solo quando serve costruire il client
+  `proxmoxer`.
+- Le password utente del login locale sono **bcrypt-hashed** via `passlib`.
+- L'autenticazione API è via **JWT** HS256, TTL 8 h (vedi `JWT_EXPIRE_MINUTES`).
+- I certificati self-signed di Proxmox sono supportati (`verify_ssl=False`
+  sulla credenziale); il warning InsecureRequest è silenziato lato backend.
+- Il frontend e il backend condividono origine via nginx reverse-proxy
+  (nessuna CORS permissiva in produzione; cambia `CORS_ORIGINS` se esponi il
+  backend direttamente).
+
+### Cambiare la password admin
+
+Login con `admin/admin`, poi da un terminale Python o Swagger
+(`http://localhost:8027/api/docs`):
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8027/api/auth/login \
+  -d 'username=admin&password=admin' | jq -r .access_token)
+
+curl -X POST http://localhost:8027/api/auth/users \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"username":"mario","password":"nuovapass","is_admin":true}'
+```
+
+Poi elimina l'utente `admin` in MariaDB, o (meglio in un secondo momento) aggiungi
+un endpoint di change-password.
+
+---
+
+## Endpoint principali
+
+| Metodo | Path | Descrizione |
+|---|---|---|
+| `POST` | `/api/auth/login` | ottiene JWT |
+| `GET`  | `/api/credentials` | elenca cluster configurati |
+| `POST` | `/api/credentials` | aggiunge un cluster (password cifrata) |
+| `GET`  | `/api/clusters/{cid}/tree` | payload completo dell'albero |
+| `GET`  | `/api/clusters/{cid}/nodes/{node}/rrd` | storico RRD |
+| `GET`  | `/api/clusters/{cid}/nodes/{node}/resources` | risorse del nodo per le form di creazione |
+| `POST` | `/api/clusters/{cid}/nodes/{node}/qemu` | crea VM |
+| `POST` | `/api/clusters/{cid}/nodes/{node}/lxc` | crea CT |
+| `GET`  | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}` | stato + config |
+| `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/{start,stop,shutdown,reboot}` | azioni |
+| `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/clone` | clonazione |
+| `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/delete` | eliminazione (con `confirm_name`) |
+| `POST` | `/api/clusters/{cid}/vms/{kind}/{node}/{vmid}/migrate` | migrazione in background |
+| `GET`  | `/api/clusters/{cid}/snapshots/{kind}/{node}/{vmid}` | snapshot history |
+| `POST` | `/api/clusters/{cid}/snapshots/...` | create / rollback / delete |
+| `POST` | `/api/clusters/{cid}/backups/{node}/{vmid}` | vzdump on demand |
+| `GET`  | `/api/tasks?active=true` | migrazioni in corso |
+| `WS`   | `/api/ws/stats?token=...` | stream 1 Hz CPU/RAM |
+
+Documentazione Swagger interattiva su `/api/docs`.
+
+---
 
 ## Struttura del progetto
 
 ```
 proxmox-manager/
-├── docker-compose.yml
+├── docker-compose.yml         # 3 servizi: db, backend, frontend (porta 8027)
 ├── .env.example
-├── README.md
-├── db/
-│   └── init.sql             # schema + utente admin iniziale
+├── db/init.sql                # schema + utente bootstrap admin/admin
 ├── backend/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   └── app/
-│       ├── main.py          # FastAPI entrypoint
-│       ├── config.py        # settings (env) + Fernet bootstrap
-│       ├── database.py      # SQLAlchemy engine/session
-│       ├── models.py        # User / ProxmoxCredential / MigrationTask
-│       ├── schemas.py       # Pydantic request/response
-│       ├── auth.py          # JWT + require_admin / require_senior
-│       ├── crypto.py        # Fernet + bcrypt helpers
-│       ├── proxmox_client.py# proxmoxer wrapper
-│       ├── tasks.py         # background migration poller
-│       ├── websocket.py     # live stats WS
+│       ├── main.py            # FastAPI + WebSocket
+│       ├── config.py          # settings + gestione chiave Fernet
+│       ├── database.py, models.py, schemas.py
+│       ├── crypto.py          # Fernet + bcrypt
+│       ├── auth.py            # JWT
+│       ├── proxmox_client.py  # wrapper proxmoxer
+│       ├── websocket.py       # stream stats a 1 Hz
+│       ├── tasks.py           # runner migrazione background
 │       └── routers/
-│           ├── auth_router.py
-│           ├── users_router.py  # CRUD utenti (admin only)
-│           ├── credentials.py
-│           ├── cluster.py
-│           ├── vms.py
-│           ├── snapbackup.py
-│           ├── tasks_router.py
-│           └── create.py
+│           ├── auth_router.py, credentials.py, cluster.py,
+│           ├── vms.py, snapbackup.py, tasks_router.py
 └── frontend/
-    ├── Dockerfile
-    ├── nginx.conf           # reverse-proxy verso backend + WS upgrade
-    ├── index.html           # redirect login/dashboard
-    ├── login.html           # senza demo accounts
-    ├── dashboard.html
-    ├── node-detail.html
-    ├── vm-detail.html       # live stats via WebSocket
-    ├── migration.html       # drag&drop → /vms/.../migrate
-    ├── backup.html
-    ├── servers.html         # gestione credenziali Proxmox
-    ├── users.html           # CRUD utenti + matrice permessi
-    ├── shared.css
-    ├── api.js               # fetch wrapper + endpoint bindings
-    ├── shared.js            # UI helpers (toast, tema, topbar)
-    └── sidebar.js           # sidebar con albero cluster live
+    ├── Dockerfile, nginx.conf  # reverse proxy /api + WS upgrade
+    ├── index.html, login.html
+    ├── css/app.css
+    └── js/
+        ├── api.js              # fetch + JWT
+        ├── tree.js             # albero sidebar + drag source/target
+        ├── charts.js           # Chart.js + WebSocket, 30 min
+        ├── detail.js           # pannello VM/CT stile Workstation
+        ├── overview.js         # main tabs
+        ├── tasks.js            # task bar + migrazione
+        ├── modal.js            # conferma-per-nome
+        └── main.js             # glue + auth guard
 ```
 
-## Sicurezza
-
-- Password utenti **bcrypt** (cost 12) — mai in chiaro
-- Password Proxmox criptate con **Fernet** (AES-128-CBC + HMAC-SHA256). La chiave è in `/data/fernet.key` nel volume `backend_data` — **fai il backup** di quel volume, senza la chiave i credenziali Proxmox non sono recuperabili
-- JWT firmati HS256, scadenza 8h (configurabile via `JWT_EXPIRE_MINUTES`)
-- CORS `*` di default: metti il dominio esatto in produzione via `CORS_ORIGINS`
-- `verify_ssl=false` è pensato per homelab con certificati self-signed; **abilitalo in produzione**
-
-## Variabili d'ambiente
-
-| Variabile | Default | Descrizione |
-|-----------|---------|-------------|
-| `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `proxmox_manager` / `pmxuser` / `pmxpass` | Database |
-| `DB_ROOT_PASSWORD` | `rootpass` | Password root MariaDB |
-| `JWT_SECRET` | `change-me-in-production-please` | **CAMBIALA** |
-| `FERNET_KEY` | vuoto (generata al primo avvio) | 32 byte base64. Per generarne una: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
-| `CORS_ORIGINS` | `*` | Virgola per più origini |
-
-## API
-
-Documentazione interattiva: **http://localhost:8027/api/docs**
-
-Endpoint principali:
-
-- `POST /api/auth/login` — login, ritorna JWT
-- `GET  /api/auth/me`
-- `GET/POST/PATCH/DELETE /api/users` — gestione utenti (admin)
-- `GET/POST/DELETE /api/credentials` — server Proxmox
-- `GET /api/clusters/{cred_id}/tree` — albero cluster completo per la sidebar
-- `POST /api/clusters/{cred_id}/vms/{kind}/{node}/{vmid}/{action}` — start/stop/shutdown/reboot/clone/migrate/delete
-- `GET/POST/DELETE /api/clusters/{cred_id}/snapshots/...` — snapshot
-- `POST /api/clusters/{cred_id}/backups/{node}/{vmid}` — backup
-- `GET /api/tasks?active=true` — task di migrazione in corso
-- `WS /api/ws/stats?token=...` — live metrics via subscribe
+---
 
 ## Sviluppo locale (senza Docker)
 
+Backend:
+
 ```bash
-# Backend
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-DB_HOST=localhost DB_USER=... uvicorn app.main:app --reload --port 8000
-
-# Frontend — basta servire la cartella statica e proxare /api/ al backend
-cd frontend
-python -m http.server 8080
-# (per lo sviluppo, imposta API_BASE='http://localhost:8000' in api.js)
+export DB_HOST=127.0.0.1 DB_USER=pmxuser DB_PASSWORD=pmxpass DB_NAME=proxmox_manager
+export JWT_SECRET=dev
+uvicorn app.main:app --reload --port 8000
 ```
 
-## Cambio password admin
+Frontend:
 
-Dal browser: login → **Utenti &amp; Permessi** → matita sull'utente `admin` → nuova password.
+```bash
+cd frontend
+python -m http.server 8080     # o qualsiasi static server
+# punta le chiamate /api/ a http://localhost:8000 via nginx / proxy del tuo editor
+```
+
+---
+
+## Note operative
+
+- **Scaling dei grafici**: Chart.js gestisce bene 1800 punti (30 min × 60 s).
+  Se vuoi scendere a 500 ms o allargare la finestra, modifica `POLL_INTERVAL`
+  (env del backend) e `WINDOW_SECONDS` in `frontend/js/charts.js`.
+- **Progresso migrazione**: estratto parsando righe `progress NN%` dal log
+  del task PVE (`/nodes/{n}/tasks/{upid}/log`). È un'euristica — migrazioni
+  su storage condiviso completano quasi istantaneamente e mostrano 99→100 %.
+- **Deploy in produzione**: metti il frontend dietro un reverse-proxy HTTPS
+  (Caddy/Traefik) e cambia `CORS_ORIGINS` + `JWT_SECRET`. Considera
+  l'uso di un API-token Proxmox invece di user/password (TODO — richiede
+  un piccolo cambio in `proxmox_client.build_client`).
+
+---
+
+## Licenza
+
+MIT (o quello che preferisci — scheletro pronto all'uso).
