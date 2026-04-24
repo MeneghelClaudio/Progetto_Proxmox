@@ -1,9 +1,7 @@
-- span eye-icon in login è spostato a destra rispetto alla location del button (deve essere dentro input password)
-- span srv-eye in servers.html, il bottone del mostra password è tutto a destra (bottone + span) invece deve essere dentro input srv-pass
 - bottone creazione server (-> dashboard) errore di visualizzazione simbolo+scritta
 - manca creazione cluster: aggiungere voce "gestione cluster" sulla parte di destra con pagina dedicata alla creazione di cluster (crei cluster, poi vedi un contenitore con il cluster e con drag&drop i server fanno join al cluster, vedere come gestire le info di join... + creazione dischi ecc)
 - uso di server: si vede soltanto il server attivo (si vedono nei nodi ma scomodo)
-- nella parte di sinistra, la parte "insfrastruttura" non si può interagire (non va espande/collassa) + mostra solo il server attivo con relativo cluster e non va bene (deve mostrare tutto!!!)
+- nella parte di sinistra, la parte "insfrastruttura" non si può interagire (va freccia espande/collassa ma non lo fa!!!) + mostra solo il server attivo con relativo cluster e non va bene (deve mostrare tutto!!!)
 - migrazione vm/container: 2026-04-24 11:00:45 2651258880 bytes (2.7 GB, 2.5 GiB) copied, 39 s, 68.0 MB/s (non so cosa sia)
 - migrazione vm/container: l'oggetto in trasferimento dovrebbe vedersi sul server di destinazione con il bordo tratteggiato
 - creazione di una vm -> Errore: Method Not Allowed (?)
@@ -16,3 +14,7 @@
 - VISUALIZZAZIONE ERRORI DETTAGLIATA COME SU PROXMOX (DETTAGLI COME SI VEDE SU TASKS/CLUSTER LOG IN BASSO)
 - mostrare messaggi in basso a destra, anche con rotella di caricamento e refresh automatico appena ha finito (sempre come tasks/cluster log di proxmox)
 - in storico live (vm/ct), la legenda CPU RAM devono essere sopra al grafico, altrimenti non si vedono
+- server aggiunti in automatico se si aggiunge il server centrale di un cluster (?)
+- se server aggiunti accesi e poi spenti, il sito non mostra più nulla (non server spenti!!!)
+- se aggiungo server con già un cluster, il cluster non viene riconosciuto automaticamente
+- in caricamento iso su server, nella lista nodi/storage non c'è nulla nonostante i server connessi!!!

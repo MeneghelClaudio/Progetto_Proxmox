@@ -70,8 +70,24 @@ async function apiRequest(path, { method = 'GET', body = null, form = false } = 
   const data = ct.includes('application/json') ? await res.json() : await res.text();
 
   if (!res.ok) {
-    const msg = (data && data.detail) || (typeof data === 'string' ? data : `HTTP ${res.status}`);
-    throw new Error(msg);
+    let msg, detail;
+    if (data && typeof data === 'object') {
+      // FastAPI/Proxmox style: { detail: "..." } oppure { detail: [{ msg: "..." }] }
+      if (Array.isArray(data.detail)) {
+        msg = data.detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+        detail = JSON.stringify(data.detail, null, 2);
+      } else {
+        msg = data.detail || data.message || `HTTP ${res.status}`;
+        detail = data.proxmox_error || data.stderr || null;
+      }
+    } else {
+      msg = typeof data === 'string' ? data : `HTTP ${res.status}`;
+      detail = null;
+    }
+    const err = new Error(msg);
+    err.detail = detail;
+    err.status = res.status;
+    throw err;
   }
   return data;
 }
@@ -144,7 +160,11 @@ const vmsApi = {
   stop:     (credId, kind, node, vmid)            => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/stop`,     { method: 'POST' }),
   shutdown: (credId, kind, node, vmid)            => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/shutdown`, { method: 'POST' }),
   reboot:   (credId, kind, node, vmid)            => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/reboot`,   { method: 'POST' }),
-  clone:    (credId, kind, node, vmid, payload)   => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/clone`,    { method: 'POST', body: payload }),
+  clone:    (credId, kind, node, vmid, payload) => {
+    // LXC clone: Proxmox non supporta full clone via API standard → forza full=0
+    if (kind === 'lxc') payload = { ...payload, full: false };
+    return apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/clone`, { method: 'POST', body: payload });
+  },
   remove:   (credId, kind, node, vmid, confirmName)=>apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/delete`,   { method: 'POST', body: { confirm_name: confirmName } }),
   migrate:  (credId, kind, node, vmid, payload)   => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/migrate`,  { method: 'POST', body: payload }),
 };
@@ -173,7 +193,41 @@ const tasksApi = {
   dismiss: (id)              => apiRequest(`/api/tasks/${id}`, { method: 'DELETE' }),
 };
 
-// ---------- Helpers: normalized cluster data (tree -> shape used by UI) ----------
+// ---------- ISO / Storage content API ----------
+
+const isoApi = {
+  // Lista i file ISO/template disponibili su uno storage di un nodo
+  list: (credId, node, storage, type = 'iso') =>
+    apiRequest(`/api/clusters/${credId}/nodes/${node}/storage/${storage}/content?content=${type}`),
+  // Upload ISO: usa FormData (multipart)
+  upload: (credId, node, storage, file, onProgress) => {
+    return new Promise((resolve, reject) => {
+      const token = getToken();
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/api/clusters/${credId}/nodes/${node}/storage/${storage}/upload`);
+      if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+      xhr.upload.addEventListener('progress', e => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round(e.loaded / e.total * 100));
+      });
+      xhr.addEventListener('load', () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText || 'null'));
+        } else {
+          let msg = `HTTP ${xhr.status}`;
+          try { msg = JSON.parse(xhr.responseText)?.detail || msg; } catch {}
+          const err = new Error(msg); err.status = xhr.status; reject(err);
+        }
+      });
+      xhr.addEventListener('error', () => reject(new Error('Errore di rete upload')));
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('filename', file.name);
+      xhr.send(fd);
+    });
+  },
+};
+
+
 
 /**
  * Normalize the /tree payload into the shape the prostatamox UI expected:

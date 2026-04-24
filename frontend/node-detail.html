@@ -238,16 +238,6 @@ async function vmAction(action, kind, node, vmid) {
   }
 }
 
-  // Fix 5: Enter sul selettore nodo non serve (è click), ma assicuriamoci
-  // che nessun form nascosto intercetti Enter e ricarichi la pagina
-  document.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
-      // Non fare nulla di default per evitare ricaricamenti indesiderati
-      const activeModal = document.querySelector('.modal-overlay:not(.hidden)');
-      if (!activeModal) e.preventDefault();
-    }
-  });
-
 init();
 </script>
 </body>

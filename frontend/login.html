@@ -44,30 +44,33 @@
   .login-title { font-size:22px; font-weight:700; margin-bottom:6px; }
   .login-sub   { font-size:13px; color:var(--text-muted); margin-bottom:28px; }
 
-  .input-wrap { position:relative; }
+  .input-wrap { position:relative; display:block; }
   .input-wrap .material-symbols-rounded {
     position:absolute; left:12px; top:50%; transform:translateY(-50%);
-    font-size:18px; color:var(--text-dim); pointer-events:none;
+    font-size:18px; color:var(--text-dim); pointer-events:none; z-index:1;
   }
   .input-wrap input {
     width:100%; padding:11px 14px 11px 40px;
     border-radius:var(--radius);
     background:var(--surface2); border:1px solid var(--border);
     color:var(--text); font-family:var(--font); font-size:14px;
-    transition:border-color .15s; outline:none;
+    transition:border-color .15s; outline:none; box-sizing:border-box;
   }
   .input-wrap input:focus { border-color:var(--accent); }
   .input-wrap input::placeholder { color:var(--text-dim); }
+  /* Spazio per pulsante occhio */
+  .input-wrap input#password { padding-right: 44px; }
   .eye-btn {
     position:absolute; right:10px; top:50%; transform:translateY(-50%);
     background:none; border:none; cursor:pointer;
     color:var(--text-dim); display:flex; align-items:center;
-    z-index:2; padding:4px;
+    z-index:3; padding:4px; line-height:0;
   }
   .eye-btn:hover { color:var(--text-muted); }
-  /* Spazio per il pulsante occhio */
-  .input-wrap input[type="password"],
-  .input-wrap input[type="text"]#password { padding-right: 44px; }
+  .eye-btn .material-symbols-rounded {
+    position:static; transform:none; pointer-events:none;
+    font-size:18px; color:inherit;
+  }
 
   .login-btn {
     width:100%; padding:12px;
@@ -140,7 +143,7 @@
         <span class="material-symbols-rounded">lock</span>
         <input type="password" id="password" placeholder="••••••••" autocomplete="current-password" />
         <button type="button" class="eye-btn" id="toggle-pw">
-          <span class="material-symbols-rounded" style="font-size:18px" id="eye-icon">visibility</span>
+          <span class="material-symbols-rounded" id="eye-icon">visibility</span>
         </button>
       </div>
     </div>

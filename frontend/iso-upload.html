@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ISO / Immagini — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css"/>
+<style>
+.upload-zone {
+  border: 2px dashed var(--border2);
+  border-radius: var(--radius-lg);
+  padding: 40px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  background: var(--surface);
+  margin-bottom: 20px;
+}
+.upload-zone:hover, .upload-zone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.upload-zone .material-symbols-rounded { font-size: 48px; color: var(--text-dim); margin-bottom: 10px; }
+.upload-zone h3 { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+.upload-zone p  { font-size: 13px; color: var(--text-muted); }
+
+.progress-bar-wrap {
+  height: 6px; border-radius: 3px;
+  background: var(--surface3); margin-top: 8px; overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%; border-radius: 3px;
+  background: var(--accent); transition: width .2s;
+}
+
+.iso-table th, .iso-table td { padding: 10px 14px; font-size: 13px; }
+.iso-table thead th { text-align: left; color: var(--text-muted); font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .6px; border-bottom: 1px solid var(--border); }
+.iso-table tbody tr:hover td { background: var(--surface2); }
+.iso-table tbody td { border-bottom: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">ISO / Immagini</h1>
+        <p class="page-subtitle">Carica file ISO, template LXC e immagini disco sui nodi Proxmox</p>
+      </div>
+    </div>
+
+    <!-- Selettore nodo + storage -->
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-header">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--info)">settings</span>
+        <span class="card-title">Destinazione</span>
+      </div>
+      <div class="grid-2" style="padding:0 0 4px">
+        <div class="form-group">
+          <label class="form-label">Nodo</label>
+          <select class="form-input" id="sel-node" onchange="onNodeChange()">
+            <option value="">— seleziona nodo —</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Storage</label>
+          <select class="form-input" id="sel-storage" onchange="loadIsoList()">
+            <option value="">— seleziona storage —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Drop zone upload -->
+    <div class="upload-zone" id="upload-zone"
+      ondragover="event.preventDefault();this.classList.add('drag-over')"
+      ondragleave="this.classList.remove('drag-over')"
+      ondrop="onFileDrop(event)"
+      onclick="document.getElementById('file-input').click()">
+      <input type="file" id="file-input" style="display:none" accept=".iso,.img,.qcow2,.vmdk,.tar.gz,.tar.xz,.tar.zst" onchange="onFileSelected(this.files[0])"/>
+      <span class="material-symbols-rounded">upload_file</span>
+      <h3>Trascina un file ISO o fai clic per selezionare</h3>
+      <p>Formati supportati: .iso · .img · .qcow2 · .vmdk · template LXC (.tar.gz .tar.xz .tar.zst)</p>
+    </div>
+
+    <!-- Upload progress -->
+    <div id="upload-progress-area" style="display:none" class="card" style="margin-bottom:20px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <span class="toast-spinner"></span>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600" id="upload-filename"></div>
+          <div style="font-size:11px;color:var(--text-muted)" id="upload-size"></div>
+        </div>
+        <span id="upload-pct" class="mono" style="font-size:13px;font-weight:700;color:var(--accent)">0%</span>
+      </div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="upload-bar" style="width:0%"></div>
+      </div>
+    </div>
+
+    <!-- Lista ISO esistenti -->
+    <div class="card">
+      <div class="card-header" style="justify-content:space-between">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">folder</span>
+          <span class="card-title">File presenti sullo storage</span>
+        </div>
+        <button class="btn btn-secondary btn-sm" onclick="loadIsoList()">
+          <span class="material-symbols-rounded">refresh</span> Aggiorna
+        </button>
+      </div>
+      <div id="iso-list-wrap">
+        <div style="padding:24px;text-align:center;color:var(--text-dim);font-size:13px">
+          Seleziona un nodo e uno storage per vedere i file disponibili.
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="api.js"></script>
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+let DATA = null;
+
+async function init() {
+  await buildSidebar('isoupload');
+  const credId = await ensureActiveCred();
+  if (!credId) return;
+  DATA = await ensureClusterData();
+  const nodeSel = document.getElementById('sel-node');
+  DATA.nodes.forEach(n => {
+    const o = document.createElement('option');
+    o.value = n.id; o.textContent = n.name;
+    nodeSel.appendChild(o);
+  });
+  if (DATA.nodes.length) {
+    nodeSel.value = DATA.nodes[0].id;
+    await onNodeChange();
+  }
+}
+
+async function onNodeChange() {
+  const node = document.getElementById('sel-node').value;
+  const storageSel = document.getElementById('sel-storage');
+  storageSel.innerHTML = '<option value="">Caricamento…</option>';
+  if (!node) return;
+  const nodeObj = DATA.nodes.find(n => n.id === node);
+  const storages = (nodeObj?.disks || []).filter(d => ['dir','nfs','cephfs','glusterfs','btrfs','lvm','lvmthin','zfspool','zdir'].includes(d.type));
+
+  if (storages.length) {
+    storageSel.innerHTML = storages.map(s =>
+      `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} (${s.type}) — ${s.usedGB}/${s.sizeGB}GB</option>`
+    ).join('');
+  } else {
+    // Fallback: storage comuni di default
+    storageSel.innerHTML = `<option value="local">local</option><option value="local-lvm">local-lvm</option>`;
+  }
+  await loadIsoList();
+}
+
+async function loadIsoList() {
+  const node    = document.getElementById('sel-node').value;
+  const storage = document.getElementById('sel-storage').value;
+  const wrap    = document.getElementById('iso-list-wrap');
+  if (!node || !storage) {
+    wrap.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-dim);font-size:13px">Seleziona nodo e storage.</div>';
+    return;
+  }
+  wrap.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-dim);font-size:13px"><span class="toast-spinner" style="display:inline-block;margin-right:8px"></span>Caricamento…</div>';
+  try {
+    const credId = getActiveCred();
+    const files = await isoApi.list(credId, node, storage, 'iso,vztmpl');
+    if (!files.length) {
+      wrap.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-dim);font-size:13px">Nessun file trovato su questo storage.</div>';
+      return;
+    }
+    wrap.innerHTML = `<table class="iso-table" style="width:100%">
+      <thead><tr>
+        <th>Volid</th><th>Tipo</th><th>Dimensione</th><th>Formato</th>
+      </tr></thead>
+      <tbody>${files.map(f => `<tr>
+        <td class="mono" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(f.volid)}">${escapeHtml(f.volid)}</td>
+        <td>${escapeHtml(f.content || '-')}</td>
+        <td>${f.size ? fmtBytes(f.size) : '-'}</td>
+        <td>${escapeHtml(f.format || '-')}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+  } catch (e) {
+    wrap.innerHTML = `<div style="padding:24px;text-align:center;color:var(--danger);font-size:13px">Errore: ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function fmtBytes(b) {
+  if (b > 1e9) return (b / 1e9).toFixed(1) + ' GB';
+  if (b > 1e6) return (b / 1e6).toFixed(1) + ' MB';
+  return (b / 1e3).toFixed(0) + ' KB';
+}
+
+function onFileDrop(e) {
+  e.preventDefault();
+  document.getElementById('upload-zone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) onFileSelected(file);
+}
+
+async function onFileSelected(file) {
+  if (!file) return;
+  const node    = document.getElementById('sel-node').value;
+  const storage = document.getElementById('sel-storage').value;
+  if (!node || !storage) {
+    showToast('Seleziona un nodo e uno storage prima di caricare', 'warning');
+    return;
+  }
+
+  const area = document.getElementById('upload-progress-area');
+  area.style.display = '';
+  document.getElementById('upload-filename').textContent = file.name;
+  document.getElementById('upload-size').textContent = fmtBytes(file.size);
+  document.getElementById('upload-bar').style.width = '0%';
+  document.getElementById('upload-pct').textContent = '0%';
+
+  const toastId = showTaskToast(`Upload ${file.name}…`);
+
+  try {
+    const credId = getActiveCred();
+    await isoApi.upload(credId, node, storage, file, pct => {
+      document.getElementById('upload-bar').style.width = pct + '%';
+      document.getElementById('upload-pct').textContent = pct + '%';
+    });
+    finishTaskToast(toastId, true, `Upload completato: ${file.name}`);
+    area.style.display = 'none';
+    await loadIsoList();
+  } catch (e) {
+    finishTaskToast(toastId, false, `Errore upload: ${file.name}`, e.detail || e.message);
+    document.getElementById('upload-bar').style.background = 'var(--danger)';
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+init();
+</script>
+</body>
+</html>

@@ -128,9 +128,11 @@ canvas.sparkline { width:100%; height:100%; }
           Elimina macchina virtuale
         </div>
         <div class="modal-sub">Questa azione è <b>irreversibile</b>. La VM e tutti i suoi dati verranno eliminati permanentemente.</div>
+        <div id="delete-vm-info" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;margin-bottom:12px;font-size:13px"></div>
         <div>
-          <label class="form-label">Digita il nome della VM per confermare:</label>
-          <input type="text" class="confirm-input" id="delete-confirm-input" placeholder="nome-vm"/>
+          <label class="form-label">Digita il <b>nome</b> o l'<b>ID</b> della VM per confermare:</label>
+          <input type="text" class="confirm-input" id="delete-confirm-input" placeholder="nome-vm oppure 101"/>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:6px" id="delete-confirm-hint"></div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-delete')">Annulla</button>
@@ -187,14 +189,14 @@ canvas.sparkline { width:100%; height:100%; }
         </div>
       </div>
     </div>
-    <!-- Fix 8: Modal crea VM/CT -->
+    <!-- Modal: crea VM/CT completo -->
     <div class="modal-overlay hidden" id="modal-create-vm">
-      <div class="modal" style="max-width:520px">
+      <div class="modal" style="max-width:580px;max-height:90vh;overflow-y:auto">
         <div class="modal-title" id="create-vm-title">
-          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">add_circle</span>
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">computer</span>
           Nuova Macchina Virtuale
         </div>
-        <div class="modal-sub">Crea una nuova VM o container LXC sul nodo selezionato.</div>
+
         <div class="grid-2">
           <div class="form-group">
             <label class="form-label">Tipo</label>
@@ -208,34 +210,98 @@ canvas.sparkline { width:100%; height:100%; }
             <select class="form-input" id="cvm-node"></select>
           </div>
         </div>
+
         <div class="grid-2">
           <div class="form-group">
-            <label class="form-label">VMID</label>
-            <input type="number" class="form-input" id="cvm-vmid" placeholder="es. 101" />
+            <label class="form-label">VMID / CTID</label>
+            <input type="number" class="form-input" id="cvm-vmid" placeholder="es. 101" min="100"/>
           </div>
           <div class="form-group">
             <label class="form-label">Nome</label>
-            <input type="text" class="form-input" id="cvm-name" placeholder="es. debian-web" />
+            <input type="text" class="form-input" id="cvm-name" placeholder="es. debian-web"/>
           </div>
         </div>
-        <div class="grid-2">
-          <div class="form-group">
-            <label class="form-label">CPU (core)</label>
-            <input type="number" class="form-input" id="cvm-cpu" value="1" min="1" />
+
+        <div style="border-top:1px solid var(--border);margin:8px 0 16px;padding-top:12px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:12px">CPU &amp; Memoria</div>
+          <div class="grid-2 vm-only">
+            <div class="form-group">
+              <label class="form-label">Socket</label>
+              <input type="number" class="form-input" id="cvm-sockets" value="1" min="1" max="4"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Core per socket</label>
+              <input type="number" class="form-input" id="cvm-cores" value="1" min="1"/>
+            </div>
+          </div>
+          <div class="form-group ct-only" style="display:none">
+            <label class="form-label">Core totali</label>
+            <input type="number" class="form-input" id="cvm-cores-ct" value="1" min="1" oninput="document.getElementById('cvm-cores').value=this.value"/>
           </div>
           <div class="form-group">
             <label class="form-label">RAM (MB)</label>
-            <input type="number" class="form-input" id="cvm-mem" value="512" min="64" step="64" />
+            <input type="number" class="form-input" id="cvm-mem" value="1024" min="64" step="128"/>
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Disco (GB)</label>
-          <input type="number" class="form-input" id="cvm-disk" value="8" min="1" />
+
+        <div style="border-top:1px solid var(--border);margin:8px 0 16px;padding-top:12px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:12px">Disco</div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Dimensione disco (GB)</label>
+              <input type="number" class="form-input" id="cvm-disk" value="20" min="1"/>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Storage</label>
+              <input type="text" class="form-input" id="cvm-storage" value="local-lvm" placeholder="local-lvm"/>
+            </div>
+          </div>
+          <div class="form-group vm-only">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="cvm-discard" checked/>
+              Discard (thin provisioning — consigliato per SSD)
+            </label>
+          </div>
         </div>
-        <div class="form-group" id="cvm-os-group">
-          <label class="form-label">Storage</label>
-          <input type="text" class="form-input" id="cvm-storage" value="local-lvm" placeholder="es. local-lvm" />
+
+        <div style="border-top:1px solid var(--border);margin:8px 0 16px;padding-top:12px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:12px">Sistema Operativo</div>
+          <div class="form-group">
+            <label class="form-label">ISO / Template <span style="color:var(--text-dim);font-weight:400">(percorso storage, es. local:iso/debian.iso)</span></label>
+            <input type="text" class="form-input" id="cvm-iso" placeholder="local:iso/debian-12.iso"/>
+          </div>
+          <div class="grid-2 vm-only">
+            <div class="form-group">
+              <label class="form-label">OS Type</label>
+              <select class="form-input" id="cvm-ostype">
+                <option value="l26">Linux 6.x/5.x/4.x (l26)</option>
+                <option value="l24">Linux 2.4</option>
+                <option value="win11">Windows 11</option>
+                <option value="win10">Windows 10/2016/2019</option>
+                <option value="win8">Windows 8/2012</option>
+                <option value="w2k8">Windows 2008/Vista/7</option>
+                <option value="wxp">Windows XP/2003</option>
+                <option value="other">Altro</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">BIOS</label>
+              <select class="form-input" id="cvm-bios">
+                <option value="seabios">SeaBIOS (legacy)</option>
+                <option value="ovmf">OVMF (UEFI/EFI)</option>
+              </select>
+            </div>
+          </div>
         </div>
+
+        <div style="border-top:1px solid var(--border);margin:8px 0 16px;padding-top:12px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:12px">Rete</div>
+          <div class="form-group">
+            <label class="form-label">Interfaccia di rete <span class="vm-only" style="color:var(--text-dim);font-weight:400">(es. virtio,bridge=vmbr0)</span><span class="ct-only" style="display:none;color:var(--text-dim);font-weight:400">(es. name=eth0,bridge=vmbr0)</span></label>
+            <input type="text" class="form-input" id="cvm-net" value="virtio,bridge=vmbr0"/>
+          </div>
+        </div>
+
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-create-vm')">Annulla</button>
           <button class="btn btn-primary" onclick="executeCreateVM()">
@@ -295,9 +361,7 @@ async function init() {
   if (urlId && allVMs.find(v => v.id === urlId)) selectVM(urlId);
   else if (allVMs.length) selectVM(allVMs[0].id);
 
-  document.getElementById('delete-confirm-input').addEventListener('input', function () {
-    document.getElementById('delete-confirm-btn').disabled = (this.value !== this.getAttribute('data-expected'));
-  });
+  document.getElementById('delete-confirm-input').addEventListener('input', validateDeleteInput);
 }
 
 function renderVMList(filter = '') {
@@ -489,7 +553,15 @@ async function renderDetail(vm) {
           <div class="card-title">Storico live</div>
           <div class="text-xs text-muted">Aggiornamento in tempo reale via WebSocket</div>
         </div>
-        ${vm.status === 'running' ? '<span class="chip chip-running">LIVE</span>' : ''}
+        <div style="display:flex;align-items:center;gap:16px">
+          <span style="display:flex;align-items:center;gap:5px;font-size:12px">
+            <span style="display:inline-block;width:14px;height:3px;border-radius:2px;background:#e8651a"></span> CPU
+          </span>
+          <span style="display:flex;align-items:center;gap:5px;font-size:12px">
+            <span style="display:inline-block;width:14px;height:3px;border-radius:2px;background:#4d9de0"></span> RAM
+          </span>
+          ${vm.status === 'running' ? '<span class="chip chip-running">LIVE</span>' : ''}
+        </div>
       </div>
       <canvas id="cv-hist" style="width:100%;height:160px"></canvas>
     </div>
@@ -539,9 +611,11 @@ async function renderDetail(vm) {
 async function vmAction(action) {
   const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
+  const labels = { start: 'avvio', stop: 'stop', shutdown: 'shutdown', reboot: 'riavvio' };
+  const toastId = showTaskToast(`${labels[action] || action} ${vm.name}…`);
   try {
     await vmsApi[action](getActiveCred(), vm.kind, vm.node, vm.id);
-    showToast(`Comando ${action} inviato a ${vm.name}`, 'success');
+    finishTaskToast(toastId, true, `Comando ${action} inviato a ${vm.name}`);
     setTimeout(async () => {
       await refreshClusterData();
       DATA = CLUSTER_DATA; allVMs = DATA.vms;
@@ -550,7 +624,7 @@ async function vmAction(action) {
       renderVMList(document.getElementById('vm-search').value);
     }, 1500);
   } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
+    finishTaskToast(toastId, false, `Errore ${action} su ${vm.name}`, e.detail || e.message);
   }
 }
 
@@ -559,23 +633,44 @@ function openDelete() {
   if (!vm) return;
   document.getElementById('delete-confirm-input').value = '';
   document.getElementById('delete-confirm-btn').disabled = true;
-  document.getElementById('delete-confirm-input').setAttribute('data-expected', vm.name);
+  // Info VM visibile nel modal
+  document.getElementById('delete-vm-info').innerHTML = `
+    <span class="material-symbols-rounded" style="font-size:16px;vertical-align:middle;color:var(--danger)">
+      ${vm.type === 'vm' ? 'computer' : 'deployed_code'}
+    </span>
+    <b>${escapeHtml(vm.name)}</b>
+    <span class="mono" style="color:var(--text-muted);margin-left:8px">ID: ${vm.id}</span>
+    <span style="color:var(--text-dim);margin-left:8px">· ${vm.node}</span>`;
+  document.getElementById('delete-confirm-hint').innerHTML =
+    `Hint: digita <span class="mono" style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="document.getElementById('delete-confirm-input').value='${escapeHtml(vm.name)}';validateDeleteInput()">${escapeHtml(vm.name)}</span>
+     oppure <span class="mono" style="cursor:pointer;color:var(--accent);text-decoration:underline" onclick="document.getElementById('delete-confirm-input').value='${vm.id}';validateDeleteInput()">${vm.id}</span>`;
+  document.getElementById('delete-confirm-input').setAttribute('data-name', vm.name);
+  document.getElementById('delete-confirm-input').setAttribute('data-id', String(vm.id));
   openModal('modal-delete');
+}
+
+function validateDeleteInput() {
+  const inp = document.getElementById('delete-confirm-input');
+  const expected_name = inp.getAttribute('data-name');
+  const expected_id   = inp.getAttribute('data-id');
+  const val = inp.value.trim();
+  document.getElementById('delete-confirm-btn').disabled = (val !== expected_name && val !== expected_id);
 }
 
 async function executeDelete() {
   const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
+  const toastId = showTaskToast(`Eliminazione ${vm.name}…`);
+  closeModal('modal-delete');
   try {
     await vmsApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, vm.name);
-    closeModal('modal-delete');
-    showToast(`VM ${vm.name} eliminata`, 'danger');
+    finishTaskToast(toastId, true, `${vm.name} eliminata`);
     await refreshClusterData();
     DATA = CLUSTER_DATA; allVMs = DATA.vms; activeVMId = null;
     renderVMList();
     document.getElementById('detail-panel').innerHTML = '<div class="detail-header" style="justify-content:center;color:var(--text-muted)"><span class="material-symbols-rounded" style="font-size:40px;color:var(--text-dim)">touch_app</span><span>Seleziona una VM dalla lista</span></div>';
   } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
+    finishTaskToast(toastId, false, `Errore eliminazione ${vm.name}`, e.detail || e.message);
   }
 }
 
@@ -594,14 +689,18 @@ async function executeClone() {
   const name  = document.getElementById('clone-name').value || null;
   const targetNode = document.getElementById('clone-node').value;
   if (!newid) { showToast('Inserisci un VMID numerico', 'warning'); return; }
+
+  const toastId = showTaskToast(`Clonazione ${vm.type.toUpperCase()} ${vm.name} → ${newid}…`);
+  closeModal('modal-clone');
+
   try {
     await vmsApi.clone(getActiveCred(), vm.kind, vm.node, vm.id, {
-      newid, name, target_node: targetNode, full: true,
+      newid, name, target_node: targetNode,
+      full: vm.type === 'vm', // CT non supporta full clone
     });
-    closeModal('modal-clone');
-    showToast(`Clonazione avviata`, 'info');
+    finishTaskToast(toastId, true, `Clonazione avviata: ${name || newid}`);
   } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
+    finishTaskToast(toastId, false, `Errore clone ${vm.name}`, e.detail || e.message);
   }
 }
 
@@ -643,19 +742,24 @@ async function deleteSnap(name) {
   } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
 }
 
-// Fix 8: Crea VM/CT
+// Fix: Crea VM/CT con modal completo
 function openCreateVM() {
   const sel = document.getElementById('cvm-node');
   sel.innerHTML = DATA.nodes.map(n => `<option value="${n.id}">${escapeHtml(n.name)}</option>`).join('');
   document.getElementById('cvm-vmid').value = '';
   document.getElementById('cvm-name').value = '';
   document.getElementById('cvm-type').value = 'qemu';
-  document.getElementById('cvm-cpu').value = '1';
-  document.getElementById('cvm-mem').value = '512';
-  document.getElementById('cvm-disk').value = '8';
+  document.getElementById('cvm-sockets').value = '1';
+  document.getElementById('cvm-cores').value = '1';
+  document.getElementById('cvm-mem').value = '1024';
+  document.getElementById('cvm-disk').value = '20';
   document.getElementById('cvm-storage').value = 'local-lvm';
-  document.getElementById('create-vm-title').innerHTML =
-    '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">computer</span> Nuova Macchina Virtuale';
+  document.getElementById('cvm-iso').value = '';
+  document.getElementById('cvm-ostype').value = 'l26';
+  document.getElementById('cvm-bios').value = 'seabios';
+  document.getElementById('cvm-net').value = 'virtio,bridge=vmbr0';
+  document.getElementById('cvm-discard').checked = true;
+  onCreateTypeChange();
   openModal('modal-create-vm');
 }
 
@@ -664,36 +768,73 @@ function onCreateTypeChange() {
   document.getElementById('create-vm-title').innerHTML = isLxc
     ? '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">deployed_code</span> Nuovo Container LXC'
     : '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">computer</span> Nuova Macchina Virtuale';
+  // Campi solo VM
+  document.querySelectorAll('.vm-only').forEach(el => el.style.display = isLxc ? 'none' : '');
+  document.querySelectorAll('.ct-only').forEach(el => el.style.display = isLxc ? '' : 'none');
 }
 
 async function executeCreateVM() {
-  const kind = document.getElementById('cvm-type').value;
-  const node = document.getElementById('cvm-node').value;
-  const vmid = parseInt(document.getElementById('cvm-vmid').value);
-  const name = document.getElementById('cvm-name').value.trim();
-  const cores = parseInt(document.getElementById('cvm-cpu').value) || 1;
-  const memory = parseInt(document.getElementById('cvm-mem').value) || 512;
-  const disk = parseInt(document.getElementById('cvm-disk').value) || 8;
+  const kind    = document.getElementById('cvm-type').value;
+  const node    = document.getElementById('cvm-node').value;
+  const vmid    = parseInt(document.getElementById('cvm-vmid').value);
+  const name    = document.getElementById('cvm-name').value.trim();
+  const sockets = parseInt(document.getElementById('cvm-sockets').value) || 1;
+  const cores   = parseInt(document.getElementById('cvm-cores').value) || 1;
+  const memory  = parseInt(document.getElementById('cvm-mem').value) || 1024;
+  const diskGB  = parseInt(document.getElementById('cvm-disk').value) || 20;
   const storage = document.getElementById('cvm-storage').value.trim() || 'local-lvm';
+  const iso     = document.getElementById('cvm-iso').value.trim();
+  const ostype  = document.getElementById('cvm-ostype').value;
+  const bios    = document.getElementById('cvm-bios').value;
+  const net     = document.getElementById('cvm-net').value.trim();
+  const discard = document.getElementById('cvm-discard').checked;
 
-  if (!vmid || !name) { showToast('Inserisci VMID e nome', 'warning'); return; }
+  if (!vmid || vmid < 100) { showToast('VMID non valido (minimo 100)', 'warning'); return; }
+  if (!name) { showToast('Inserisci un nome', 'warning'); return; }
 
   const credId = getActiveCred();
-  const payload = kind === 'qemu'
-    ? { vmid, name, cores, memory, scsi0: `${storage}:${disk}`, ostype: 'l26', scsihw: 'virtio-scsi-pci' }
-    : { vmid, hostname: name, cores, memory, rootfs: `${storage}:${disk}` };
+  let payload, endpoint;
+
+  if (kind === 'qemu') {
+    payload = {
+      vmid, name, sockets, cores, memory,
+      ostype,
+      bios,
+      scsihw: 'virtio-scsi-pci',
+      [`scsi0`]: `${storage}:${diskGB}${discard ? ',discard=on' : ''}`,
+      net0: net || 'virtio,bridge=vmbr0',
+    };
+    if (iso) payload.ide2 = `${iso},media=cdrom`;
+    // Virtio drivers: abilitati di default con scsihw=virtio-scsi-pci
+    if (bios === 'ovmf') {
+      payload.efidisk0 = `${storage}:1`;
+    }
+    endpoint = `/api/clusters/${credId}/nodes/${node}/qemu`;
+  } else {
+    payload = {
+      vmid, hostname: name, cores, memory,
+      rootfs: `${storage}:${diskGB}`,
+      net0: net || 'name=eth0,bridge=vmbr0',
+    };
+    if (iso) payload.ostemplate = iso;
+    endpoint = `/api/clusters/${credId}/nodes/${node}/lxc`;
+  }
+
+  const toastId = showTaskToast(`Creazione ${kind === 'qemu' ? 'VM' : 'CT'} "${name}" (${vmid})…`);
+  closeModal('modal-create-vm');
 
   try {
-    await apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/create`, { method: 'POST', body: payload });
-    showToast(`${kind === 'qemu' ? 'VM' : 'Container'} "${name}" (${vmid}) creato`, 'success');
-    closeModal('modal-create-vm');
+    await apiRequest(endpoint, { method: 'POST', body: payload });
+    finishTaskToast(toastId, true, `${kind === 'qemu' ? 'VM' : 'Container'} "${name}" creato`);
     setTimeout(async () => {
       await refreshClusterData();
       DATA = CLUSTER_DATA; allVMs = DATA.vms;
       renderVMList(document.getElementById('vm-search').value);
-    }, 1500);
+    }, 2000);
   } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
+    // Errore dettagliato come Proxmox
+    const detail = e.detail || e.message;
+    finishTaskToast(toastId, false, `Errore creazione "${name}"`, detail);
   }
 }
 

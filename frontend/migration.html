@@ -61,6 +61,17 @@
   background:var(--surface2); border:1px solid var(--border);
   border-radius:var(--radius);
 }
+.vm-drag-item.migrating {
+  border-style: dashed !important;
+  border-color: var(--accent) !important;
+  opacity: 0.7;
+  background: var(--accent-dim) !important;
+  animation: pulse-border 1.5s ease-in-out infinite;
+}
+@keyframes pulse-border {
+  0%, 100% { border-color: var(--accent); }
+  50%       { border-color: var(--info); }
+}
 .task-bar .task-progress-wrap { flex:1; }
 .task-progress {
   height:6px; border-radius:3px; background:var(--surface3); overflow:hidden;
@@ -115,6 +126,7 @@ let DATA = null;
 let draggedVM = null;
 let dragSourceNode = null;
 let activePolling = null;
+const migratingVMs = new Map();
 
 async function init() {
   await buildSidebar('migration');
@@ -204,17 +216,31 @@ async function onDrop(e, zone) {
   const vm = DATA.vms.find(v => v.id === draggedVM.id);
   if (!vm) return;
 
+  // Marca la VM come in migrazione (bordo tratteggiato)
+  const vmEl = document.querySelector(`.vm-drag-item[data-vm-id="${vm.id}"]`);
+  if (vmEl) vmEl.classList.add('migrating');
+
+  const online = vm.status === 'running';
+  const toastId = showTaskToast(
+    `Migrazione ${vm.type.toUpperCase()} ${vm.name} → ${targetNode}…`
+  );
+  migratingVMs.set(vm.id, { toastId, targetNode });
+
+  addLog(`Migrazione avviata: ${vm.name} (${vm.type.toUpperCase()}) ${vm.node} → ${targetNode}${online ? '' : ' [offline]'}`, 'info');
+
   try {
-    const task = await vmsApi.migrate(getActiveCred(), vm.kind, vm.node, vm.id, {
+    await vmsApi.migrate(getActiveCred(), vm.kind, vm.node, vm.id, {
       target_node: targetNode,
-      online: vm.status === 'running',
+      online,
       with_local_disks: true,
     });
-    addLog(`Migrazione avviata: ${vm.name} (${vm.type.toUpperCase()}) da ${vm.node} → ${targetNode}`, 'info');
-    showToast(`Migrazione di ${vm.name} avviata`, 'info');
+    // Toast rimane in spinner finché il polling non rileva il completamento
   } catch (err) {
-    addLog(`Errore migrazione ${vm.name}: ${err.message}`, 'error');
-    showToast('Errore: ' + err.message, 'danger');
+    const detail = err.detail || null;
+    finishTaskToast(toastId, false, `Errore migrazione ${vm.name}`, detail || err.message);
+    addLog(`Errore migrazione ${vm.name}: ${err.message}${detail ? ' — ' + detail : ''}`, 'error');
+    migratingVMs.delete(vm.id);
+    if (vmEl) vmEl.classList.remove('migrating');
   }
 
   draggedVM = null;
@@ -230,15 +256,47 @@ function addLog(msg, type = 'info') {
   scroll.insertBefore(div, scroll.firstChild);
 }
 
+function parseMigrateLog(msg) {
+  // Filtra righe tipo "2651258880 bytes (2.7 GB, 2.5 GiB) copied, 39 s, 68.0 MB/s"
+  // e le trasforma in formato leggibile
+  const bytesMatch = msg.match(/^(\d+)\s+bytes\s+\(([^)]+)\)\s+copied,\s+([\d.]+)\s*s,\s+([\d.]+\s*\w+\/s)/);
+  if (bytesMatch) {
+    return `Trasferiti ${bytesMatch[2]} in ${bytesMatch[3]}s @ ${bytesMatch[4]}`;
+  }
+  return msg;
+}
+
 async function startTaskPolling() {
   async function tick() {
     try {
       const tasks = await tasksApi.list(false);
       renderTasks(tasks);
       const running = tasks.filter(t => t.status === 'pending' || t.status === 'running');
+
+      // Aggiorna toast per migrazioni completate/fallite
+      migratingVMs.forEach((info, vmid) => {
+        const task = tasks.find(t => t.vmid === vmid);
+        if (task && task.status !== 'pending' && task.status !== 'running') {
+          const success = task.status === 'success';
+          const vm = DATA.vms.find(v => v.id === vmid);
+          finishTaskToast(
+            info.toastId,
+            success,
+            success ? `Migrazione completata: ${vm?.name || vmid}` : `Migrazione fallita: ${vm?.name || vmid}`,
+            task.message || null
+          );
+          addLog(
+            success
+              ? `Migrazione completata: ${vm?.name || vmid} → ${info.targetNode}`
+              : `Migrazione fallita: ${vm?.name || vmid} — ${task.message || ''}`,
+            success ? 'success' : 'error'
+          );
+          migratingVMs.delete(vmid);
+        }
+      });
+
       if (running.length === 0) {
-        // refresh cluster data once running tasks finish
-        if (activePolling && activePolling.wasRunning) {
+        if (activePolling?.wasRunning) {
           await refreshClusterData();
           DATA = CLUSTER_DATA;
           renderLayout();
@@ -255,31 +313,31 @@ async function startTaskPolling() {
 
 function renderTasks(tasks) {
   const running = tasks.filter(t => t.status === 'pending' || t.status === 'running').slice(0, 5);
-  const done = tasks.filter(t => t.status !== 'pending' && t.status !== 'running').slice(0, 3);
+  const done = tasks.filter(t => t.status !== 'pending' && t.status !== 'running').slice(0, 4);
   const el = document.getElementById('active-tasks');
   if (!running.length && !done.length) { el.innerHTML = ''; return; }
   el.innerHTML = `<div style="margin-bottom:16px">
     ${running.map(t => `
       <div class="task-bar">
-        <span class="material-symbols-rounded" style="color:var(--accent)">swap_horiz</span>
+        <span class="toast-spinner" style="flex-shrink:0"></span>
         <div class="task-progress-wrap">
           <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-size:12px">
-            <span><b>${escapeHtml(t.kind.toUpperCase())} ${t.vmid}</b> · ${escapeHtml(t.source_node)} → ${escapeHtml(t.target_node)}</span>
-            <span class="mono">${t.progress}%</span>
+            <span><b>${escapeHtml(t.kind?.toUpperCase() || '?')} ${t.vmid}</b> · ${escapeHtml(t.source_node || '?')} → ${escapeHtml(t.target_node || '?')}</span>
+            <span class="mono">${t.progress || 0}%</span>
           </div>
-          <div class="task-progress"><div class="task-progress-fill" style="width:${t.progress}%"></div></div>
-          <div class="text-xs text-muted" style="margin-top:4px">${escapeHtml(t.message || t.status)}</div>
+          <div class="task-progress"><div class="task-progress-fill" style="width:${t.progress || 0}%"></div></div>
+          <div class="text-xs text-muted" style="margin-top:4px">${escapeHtml(parseMigrateLog(t.message || t.status || ''))}</div>
         </div>
       </div>`).join('')}
     ${done.map(t => `
       <div class="task-bar">
-        <span class="material-symbols-rounded" style="color:${t.status === 'success' ? 'var(--success)' : 'var(--danger)'}">${t.status === 'success' ? 'check_circle' : 'error'}</span>
+        <span class="material-symbols-rounded" style="color:${t.status === 'success' ? 'var(--success)' : 'var(--danger)'};flex-shrink:0">${t.status === 'success' ? 'check_circle' : 'error'}</span>
         <div class="task-progress-wrap">
           <div style="display:flex;justify-content:space-between;font-size:12px">
-            <span><b>${escapeHtml(t.kind.toUpperCase())} ${t.vmid}</b> · ${escapeHtml(t.source_node)} → ${escapeHtml(t.target_node)}</span>
+            <span><b>${escapeHtml(t.kind?.toUpperCase() || '?')} ${t.vmid}</b> · ${escapeHtml(t.source_node || '?')} → ${escapeHtml(t.target_node || '?')}</span>
             <span style="color:${t.status === 'success' ? 'var(--success)' : 'var(--danger)'}">${t.status}</span>
           </div>
-          <div class="text-xs text-muted" style="margin-top:4px">${escapeHtml(t.message || '')}</div>
+          ${t.message ? `<div class="text-xs text-muted" style="margin-top:4px;font-family:var(--mono)">${escapeHtml(parseMigrateLog(t.message))}</div>` : ''}
         </div>
         <button class="btn btn-sm btn-secondary" onclick="dismissTask('${t.id}')" title="Rimuovi">
           <span class="material-symbols-rounded">close</span>

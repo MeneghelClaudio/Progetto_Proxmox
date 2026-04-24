@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Gestione Cluster — ProxMox Manager</title>
+<link rel="stylesheet" href="shared.css"/>
+<style>
+/* ── Layout ── */
+.cluster-layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; align-items: start; }
+
+/* ── Cluster card ── */
+.cluster-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden;
+  transition: border-color .15s;
+}
+.cluster-card.drop-target { border-color: var(--accent); background: var(--accent-dim); }
+.cluster-header {
+  padding: 14px 18px;
+  background: var(--surface2); border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+.cluster-header h3 { font-size: 14px; font-weight: 700; flex: 1; }
+.cluster-body { padding: 12px; min-height: 80px; }
+.cluster-footer {
+  padding: 10px 18px; background: var(--surface2);
+  border-top: 1px solid var(--border);
+  display: flex; gap: 8px; align-items: center;
+}
+
+/* ── Node chip in cluster ── */
+.node-member {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin-bottom: 6px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); user-select: none;
+}
+.node-member.primary { border-color: var(--accent); background: var(--accent-dim); }
+.node-member-info { flex: 1; }
+.node-member-name { font-size: 13px; font-weight: 600; }
+.node-member-meta { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+.drop-hint {
+  text-align: center; padding: 20px; color: var(--text-dim);
+  font-size: 12px; border: 1px dashed var(--border);
+  border-radius: var(--radius); margin: 4px;
+}
+
+/* ── Available servers panel ── */
+.servers-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden;
+  position: sticky; top: 80px;
+}
+.servers-panel-header {
+  padding: 14px 18px; background: var(--surface2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .6px; color: var(--text-muted);
+}
+.draggable-server {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  cursor: grab; user-select: none; transition: background .12s;
+}
+.draggable-server:last-child { border-bottom: none; }
+.draggable-server:hover { background: var(--surface2); }
+.draggable-server.dragging { opacity: .4; cursor: grabbing; }
+.draggable-server.in-cluster { opacity: .35; pointer-events: none; }
+.srv-info { flex: 1; }
+.srv-name { font-size: 13px; font-weight: 600; }
+.srv-host { font-size: 11px; color: var(--text-muted); font-family: var(--mono); }
+
+/* ── New cluster form ── */
+.new-cluster-bar {
+  background: var(--surface2); border: 1px dashed var(--border2);
+  border-radius: var(--radius-lg); padding: 16px 20px;
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 16px; cursor: pointer; transition: border-color .15s;
+}
+.new-cluster-bar:hover { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <header class="topbar" id="topbar"></header>
+  <aside class="sidebar" id="sidebar"></aside>
+  <main class="main" id="main">
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">Gestione Cluster</h1>
+        <p class="page-subtitle">Crea cluster e aggiungi server tramite drag &amp; drop</p>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" onclick="openNewCluster()">
+          <span class="material-symbols-rounded">add</span> Nuovo cluster
+        </button>
+      </div>
+    </div>
+
+    <div class="cluster-layout">
+      <!-- Clusters -->
+      <div id="clusters-col">
+        <div style="color:var(--text-dim);font-size:13px;text-align:center;padding:40px" id="clusters-empty" style="display:none">
+          Nessun cluster configurato. Creane uno con il pulsante in alto.
+        </div>
+        <div id="clusters-list"></div>
+      </div>
+
+      <!-- Server disponibili (drag source) -->
+      <div class="servers-panel">
+        <div class="servers-panel-header">
+          <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px">dns</span>
+          Server Proxmox
+          <span style="float:right;font-weight:400;text-transform:none;font-size:11px;color:var(--text-dim)">trascina nei cluster</span>
+        </div>
+        <div id="servers-drag-list">
+          <div style="padding:20px;text-align:center;color:var(--text-dim);font-size:12px">Caricamento…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: nuovo cluster -->
+    <div class="modal-overlay hidden" id="modal-new-cluster">
+      <div class="modal" style="max-width:460px">
+        <div class="modal-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">hub</span>
+          Nuovo Cluster
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nome cluster</label>
+          <input type="text" class="form-input" id="nc-name" placeholder="es. pve-prod-cluster"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nodo primario (manager)</label>
+          <select class="form-input" id="nc-primary"></select>
+        </div>
+        <div class="modal-sub" style="margin-top:0">
+          Dopo la creazione puoi aggiungere altri nodi trascinandoli nel cluster.
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-new-cluster')">Annulla</button>
+          <button class="btn btn-primary" onclick="createCluster()">
+            <span class="material-symbols-rounded">hub</span> Crea
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: configura join -->
+    <div class="modal-overlay hidden" id="modal-join-info">
+      <div class="modal" style="max-width:500px">
+        <div class="modal-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">link</span>
+          Configura Join al Cluster
+        </div>
+        <div class="modal-sub" id="join-info-sub"></div>
+        <div class="form-group">
+          <label class="form-label">Indirizzo IP del nodo che entra nel cluster</label>
+          <input type="text" class="form-input" id="join-ip" placeholder="es. 192.168.1.101"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Password root del nodo master</label>
+          <div style="position:relative;display:block">
+            <input type="password" class="form-input" id="join-pass" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding-right:44px"/>
+            <button type="button" onclick="toggleJoinPass()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px">
+              <span class="material-symbols-rounded" id="join-pass-eye" style="font-size:18px;pointer-events:none">visibility</span>
+            </button>
+          </div>
+        </div>
+        <div id="join-info-box" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;color:var(--text-muted);margin-bottom:12px;display:none">
+          <b>Comando equivalente sul nodo:</b><br>
+          <code id="join-cmd" style="font-family:var(--mono);word-break:break-all"></code>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-join-info')">Annulla</button>
+          <button class="btn btn-primary" onclick="executeJoin()">
+            <span class="material-symbols-rounded">link</span> Esegui join
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="api.js"></script>
+<script src="shared.js"></script>
+<script src="sidebar.js"></script>
+<script>
+const session = requireAuth();
+if (!can(session, 'manage_cluster')) {
+  showToast('Accesso negato', 'danger');
+  setTimeout(() => location.href = 'dashboard.html', 1500);
+}
+
+let SERVERS = [];           // credenziali registrate
+let CLUSTERS = [];          // { id, name, primary_id, node_ids: [] }  — local state
+let draggedServerId = null;
+let pendingJoin = null;     // { clusterId, serverId }
+
+async function init() {
+  await buildSidebar('cluster');
+  await loadData();
+}
+
+async function loadData() {
+  try {
+    SERVERS = await credsApi.list();
+  } catch { SERVERS = []; }
+  // Carica cluster dal backend (se esiste endpoint) oppure usa localStorage come fallback
+  try {
+    const raw = localStorage.getItem('pmx_clusters');
+    CLUSTERS = raw ? JSON.parse(raw) : [];
+  } catch { CLUSTERS = []; }
+  renderAll();
+}
+
+function saveClusters() {
+  localStorage.setItem('pmx_clusters', JSON.stringify(CLUSTERS));
+}
+
+function renderAll() {
+  renderServerPanel();
+  renderClusters();
+}
+
+function renderServerPanel() {
+  const el = document.getElementById('servers-drag-list');
+  if (!SERVERS.length) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);font-size:12px">Nessun server registrato.<br><a href="servers.html" style="color:var(--accent)">Aggiungine uno →</a></div>';
+    return;
+  }
+  const allMemberIds = new Set(CLUSTERS.flatMap(c => [c.primary_id, ...(c.node_ids || [])]));
+  el.innerHTML = SERVERS.map(s => {
+    const inCluster = allMemberIds.has(s.id);
+    return `<div class="draggable-server ${inCluster ? 'in-cluster' : ''}"
+      draggable="${inCluster ? 'false' : 'true'}"
+      data-srv-id="${s.id}"
+      ondragstart="onServerDragStart(event)"
+      ondragend="onServerDragEnd(event)">
+      <span class="material-symbols-rounded" style="font-size:18px;color:${inCluster ? 'var(--text-dim)' : 'var(--accent)'}">dns</span>
+      <div class="srv-info">
+        <div class="srv-name">${escapeHtml(s.name)}</div>
+        <div class="srv-host">${escapeHtml(s.host)}:${s.port}</div>
+      </div>
+      <span class="material-symbols-rounded" style="font-size:16px;color:var(--text-dim)">${inCluster ? 'check_circle' : 'drag_indicator'}</span>
+    </div>`;
+  }).join('');
+}
+
+function renderClusters() {
+  const el = document.getElementById('clusters-list');
+  if (!CLUSTERS.length) {
+    el.innerHTML = `<div style="background:var(--surface);border:1px dashed var(--border2);border-radius:var(--radius-lg);padding:48px;text-align:center;color:var(--text-muted)">
+      <span class="material-symbols-rounded" style="font-size:48px;color:var(--text-dim);margin-bottom:12px;display:block">hub</span>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:8px;color:var(--text)">Nessun cluster creato</h3>
+      <p>Usa il pulsante <b>Nuovo cluster</b> in alto, poi trascina i server.</p>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = CLUSTERS.map(cluster => {
+    const primary = SERVERS.find(s => s.id === cluster.primary_id);
+    const members = (cluster.node_ids || []).map(id => SERVERS.find(s => s.id === id)).filter(Boolean);
+
+    const memberHtml = [
+      // Primary
+      primary ? `<div class="node-member primary">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--accent)">star</span>
+        <div class="node-member-info">
+          <div class="node-member-name">${escapeHtml(primary.name)}</div>
+          <div class="node-member-meta">${escapeHtml(primary.host)}:${primary.port} · <b>primario</b></div>
+        </div>
+        <button class="btn btn-sm" style="background:none;border:none;color:var(--text-dim);cursor:pointer" title="Non rimuovibile (primario)">
+          <span class="material-symbols-rounded" style="font-size:16px">lock</span>
+        </button>
+      </div>` : '',
+      // Other members
+      ...members.map(s => `<div class="node-member">
+        <span class="material-symbols-rounded" style="font-size:18px;color:var(--success)">storage</span>
+        <div class="node-member-info">
+          <div class="node-member-name">${escapeHtml(s.name)}</div>
+          <div class="node-member-meta">${escapeHtml(s.host)}:${s.port}</div>
+        </div>
+        <button class="btn btn-sm btn-danger" onclick="removeFromCluster(${cluster.id},${s.id})" title="Rimuovi dal cluster">
+          <span class="material-symbols-rounded">remove_circle</span>
+        </button>
+      </div>`),
+      // Drop hint
+      `<div class="drop-hint" id="drop-hint-${cluster.id}">
+        <span class="material-symbols-rounded" style="font-size:20px;display:block;margin-bottom:4px">add_circle</span>
+        Rilascia un server qui per aggiungerlo
+      </div>`
+    ].join('');
+
+    return `<div class="cluster-card" style="margin-bottom:16px"
+      id="cluster-card-${cluster.id}"
+      ondragover="onClusterDragOver(event,${cluster.id})"
+      ondragleave="onClusterDragLeave(event,${cluster.id})"
+      ondrop="onClusterDrop(event,${cluster.id})">
+      <div class="cluster-header">
+        <span class="material-symbols-rounded" style="font-size:20px;color:var(--info)">hub</span>
+        <h3>${escapeHtml(cluster.name)}</h3>
+        <span class="chip chip-running" style="margin-left:auto">${1 + members.length} nodi</span>
+      </div>
+      <div class="cluster-body">${memberHtml}</div>
+      <div class="cluster-footer">
+        <button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cluster.id})">
+          <span class="material-symbols-rounded">terminal</span> Comando join
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCluster(${cluster.id})" style="margin-left:auto">
+          <span class="material-symbols-rounded">delete</span> Elimina
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Drag & drop ──
+
+function onServerDragStart(e) {
+  draggedServerId = parseInt(e.currentTarget.dataset.srvId);
+  e.currentTarget.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+function onServerDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  draggedServerId = null;
+  document.querySelectorAll('.cluster-card').forEach(c => c.classList.remove('drop-target'));
+}
+function onClusterDragOver(e, clusterId) {
+  if (!draggedServerId) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  document.getElementById(`cluster-card-${clusterId}`)?.classList.add('drop-target');
+}
+function onClusterDragLeave(e, clusterId) {
+  if (!e.currentTarget.contains(e.relatedTarget)) {
+    document.getElementById(`cluster-card-${clusterId}`)?.classList.remove('drop-target');
+  }
+}
+function onClusterDrop(e, clusterId) {
+  e.preventDefault();
+  document.getElementById(`cluster-card-${clusterId}`)?.classList.remove('drop-target');
+  if (!draggedServerId) return;
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  if (!cluster) return;
+  if (cluster.primary_id === draggedServerId || (cluster.node_ids || []).includes(draggedServerId)) {
+    showToast('Il server è già in questo cluster', 'warning'); return;
+  }
+  // Chiedi conferma join con IP + password
+  pendingJoin = { clusterId, serverId: draggedServerId };
+  const srv = SERVERS.find(s => s.id === draggedServerId);
+  const primary = SERVERS.find(s => s.id === cluster.primary_id);
+  document.getElementById('join-info-sub').textContent =
+    `Aggiungi "${srv?.name}" al cluster "${cluster.name}" (primario: ${primary?.name})`;
+  document.getElementById('join-ip').value = srv?.host || '';
+  document.getElementById('join-pass').value = '';
+  document.getElementById('join-info-box').style.display = 'none';
+  openModal('modal-join-info');
+  draggedServerId = null;
+}
+
+function toggleJoinPass() {
+  const inp = document.getElementById('join-pass');
+  const icon = document.getElementById('join-pass-eye');
+  if (inp.type === 'password') { inp.type = 'text'; icon.textContent = 'visibility_off'; }
+  else { inp.type = 'password'; icon.textContent = 'visibility'; }
+}
+
+async function executeJoin() {
+  if (!pendingJoin) return;
+  const { clusterId, serverId } = pendingJoin;
+  const ip   = document.getElementById('join-ip').value.trim();
+  const pass = document.getElementById('join-pass').value;
+  if (!ip) { showToast('Inserisci l\'IP del nodo', 'warning'); return; }
+  if (!pass) { showToast('Inserisci la password root del nodo master', 'warning'); return; }
+
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  const primary = SERVERS.find(s => s.id === cluster?.primary_id);
+  const credId  = getActiveCred();
+
+  const toastId = showTaskToast(`Join di ${SERVERS.find(s=>s.id===serverId)?.name} al cluster…`);
+  closeModal('modal-join-info');
+
+  try {
+    await apiRequest(`/api/clusters/${credId}/cluster/join`, {
+      method: 'POST',
+      body: {
+        node_cred_id: serverId,
+        link0_address: ip,
+        master_host: primary?.host,
+        master_password: pass,
+      }
+    });
+    cluster.node_ids = [...(cluster.node_ids || []), serverId];
+    saveClusters();
+    finishTaskToast(toastId, true, 'Join completato');
+    renderAll();
+  } catch (e) {
+    finishTaskToast(toastId, false, 'Errore join', e.detail || e.message);
+  }
+  pendingJoin = null;
+}
+
+function showJoinCmd(clusterId) {
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  const primary = SERVERS.find(s => s.id === cluster?.primary_id);
+  const cmd = `pvecm add ${primary?.host || '<master-ip>'} --link0 <node-ip>`;
+  document.getElementById('join-cmd').textContent = cmd;
+  document.getElementById('join-info-box').style.display = '';
+  document.getElementById('join-info-sub').textContent = `Comando da eseguire sui nodi da aggiungere al cluster "${cluster?.name}"`;
+  document.getElementById('join-ip').value = '';
+  document.getElementById('join-pass').value = '';
+  openModal('modal-join-info');
+}
+
+function removeFromCluster(clusterId, serverId) {
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  if (!cluster) return;
+  if (!confirm(`Rimuovere il server dal cluster "${cluster.name}"?`)) return;
+  cluster.node_ids = (cluster.node_ids || []).filter(id => id !== serverId);
+  saveClusters();
+  renderAll();
+  showToast('Server rimosso dal cluster', 'warning');
+}
+
+function deleteCluster(clusterId) {
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  if (!confirm(`Eliminare il cluster "${cluster?.name}"? I server non vengono modificati.`)) return;
+  CLUSTERS = CLUSTERS.filter(c => c.id !== clusterId);
+  saveClusters();
+  renderAll();
+  showToast(`Cluster "${cluster?.name}" eliminato`, 'warning');
+}
+
+function openNewCluster() {
+  const sel = document.getElementById('nc-primary');
+  sel.innerHTML = SERVERS.map(s =>
+    `<option value="${s.id}">${escapeHtml(s.name)} — ${escapeHtml(s.host)}</option>`
+  ).join('');
+  document.getElementById('nc-name').value = '';
+  openModal('modal-new-cluster');
+}
+
+function createCluster() {
+  const name = document.getElementById('nc-name').value.trim();
+  const primaryId = parseInt(document.getElementById('nc-primary').value);
+  if (!name) { showToast('Inserisci il nome del cluster', 'warning'); return; }
+  if (!primaryId) { showToast('Seleziona un nodo primario', 'warning'); return; }
+  const id = Date.now();
+  CLUSTERS.push({ id, name, primary_id: primaryId, node_ids: [] });
+  saveClusters();
+  closeModal('modal-new-cluster');
+  renderAll();
+  showToast(`Cluster "${name}" creato`, 'success');
+}
+
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+}
+
+// Enter nei modal
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  const m = document.querySelector('.modal-overlay:not(.hidden)');
+  if (!m) return;
+  if (m.id === 'modal-new-cluster')  { e.preventDefault(); createCluster(); }
+  if (m.id === 'modal-join-info')    { e.preventDefault(); executeJoin(); }
+});
+
+init();
+</script>
+</body>
+</html>
