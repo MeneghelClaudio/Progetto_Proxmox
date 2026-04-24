@@ -131,10 +131,28 @@ async function init() {
   DATA = await ensureClusterData();
 
   if (can(session, 'add_server')) {
+    // Fix 6: mostra server attivo con nome + IP accanto al bottone
+    let activeSrvLabel = '';
+    try {
+      const creds = await credsApi.list();
+      const activeId = getActiveCred();
+      const activeSrv = creds.find(c => c.id === activeId);
+      if (activeSrv) {
+        activeSrvLabel = `<span style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
+          <span class="material-symbols-rounded" style="font-size:14px;color:var(--success)">circle</span>
+          <span class="mono">${activeSrv.name}</span>
+          <span style="color:var(--text-dim)">·</span>
+          <span class="mono" style="color:var(--text-dim)">${activeSrv.host}:${activeSrv.port}</span>
+        </span>`;
+      }
+    } catch {}
     document.getElementById('page-actions').innerHTML = `
-      <a href="servers.html" class="btn btn-secondary">
-        <span class="material-symbols-rounded">dns</span> Server
-      </a>`;
+      <div style="display:flex;align-items:center;gap:12px">
+        ${activeSrvLabel}
+        <a href="servers.html" class="btn btn-secondary">
+          <span class="material-symbols-rounded">dns</span> Server
+        </a>
+      </div>`;
   }
 
   renderOverview();

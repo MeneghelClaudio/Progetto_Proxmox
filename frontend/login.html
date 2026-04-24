@@ -62,8 +62,12 @@
     position:absolute; right:10px; top:50%; transform:translateY(-50%);
     background:none; border:none; cursor:pointer;
     color:var(--text-dim); display:flex; align-items:center;
+    z-index:2; padding:4px;
   }
   .eye-btn:hover { color:var(--text-muted); }
+  /* Spazio per il pulsante occhio */
+  .input-wrap input[type="password"],
+  .input-wrap input[type="text"]#password { padding-right: 44px; }
 
   .login-btn {
     width:100%; padding:12px;
@@ -163,7 +167,9 @@
   const btn    = document.getElementById('login-btn');
   const lbl    = document.getElementById('btn-label');
 
-  document.getElementById('toggle-pw').addEventListener('click', () => {
+  document.getElementById('toggle-pw').addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     const pw = document.getElementById('password');
     const icon = document.getElementById('eye-icon');
     if (pw.type === 'password') { pw.type = 'text'; icon.textContent = 'visibility_off'; }

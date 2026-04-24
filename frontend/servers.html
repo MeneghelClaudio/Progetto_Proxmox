@@ -26,6 +26,13 @@
 .server-host { font-size:12px; color:var(--text-muted); font-family:var(--mono); }
 .server-meta { font-size:11px; color:var(--text-dim); margin-top:2px; }
 
+.cluster-badge {
+  display:inline-flex; align-items:center; gap:6px;
+  background:var(--info-dim); border:1px solid var(--info);
+  border-radius:20px; padding:3px 10px;
+  font-size:11px; color:var(--info); font-weight:600;
+}
+
 .empty-state {
   background:var(--surface); border:1px dashed var(--border);
   border-radius:var(--radius-lg); padding:48px;
@@ -50,10 +57,10 @@
 
     <div id="server-list"></div>
 
-    <!-- Modal: add server -->
+    <!-- Modal: add/edit server -->
     <div class="modal-overlay hidden" id="modal-add-server">
       <div class="modal" style="max-width:540px">
-        <div class="modal-title">
+        <div class="modal-title" id="modal-server-title">
           <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">dns</span>
           Aggiungi server Proxmox
         </div>
@@ -86,9 +93,14 @@
             </select>
           </div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Password</label>
-          <input type="password" class="form-input" id="srv-pass" placeholder="••••••••" />
+        <div class="form-group" id="srv-pass-group">
+          <label class="form-label">Password <span id="srv-pass-hint" style="color:var(--text-dim);font-weight:400">(lascia vuoto per non modificare)</span></label>
+          <div style="position:relative">
+            <input type="password" class="form-input" id="srv-pass" placeholder="••••••••" style="padding-right:44px" />
+            <button type="button" id="srv-eye" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:2;padding:4px">
+              <span class="material-symbols-rounded" id="srv-eye-icon" style="font-size:18px">visibility</span>
+            </button>
+          </div>
         </div>
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
@@ -99,8 +111,37 @@
 
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-add-server')">Annulla</button>
-          <button class="btn btn-primary" onclick="saveServer()">
+          <button class="btn btn-primary" id="srv-save-btn" onclick="saveServer()">
             <span class="material-symbols-rounded">save</span> Salva
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: create cluster (raggruppa server esistenti) -->
+    <div class="modal-overlay hidden" id="modal-create-cluster">
+      <div class="modal" style="max-width:500px">
+        <div class="modal-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">hub</span>
+          Crea Cluster
+        </div>
+        <div class="modal-sub">Raggruppa i server Proxmox registrati in un cluster logico. Il cluster viene gestito tramite il nodo primario.</div>
+        <div class="form-group">
+          <label class="form-label">Nome cluster</label>
+          <input type="text" class="form-input" id="cl-name" placeholder="es. pve-cluster-01" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nodo primario (manager)</label>
+          <select class="form-input" id="cl-primary"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" style="margin-bottom:8px">Nodi aggiuntivi (opzionale)</label>
+          <div id="cl-nodes-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-create-cluster')">Annulla</button>
+          <button class="btn btn-primary" onclick="saveCluster()">
+            <span class="material-symbols-rounded">hub</span> Crea cluster
           </button>
         </div>
       </div>
@@ -114,16 +155,41 @@
 <script>
 const session = requireAuth();
 let SERVERS = [];
+let editingServerId = null; // null = nuova aggiunta, numero = modifica
 
 async function init() {
   await buildSidebar('servers');
   const pa = document.getElementById('page-actions');
+  const btns = [];
   if (can(session, 'add_server')) {
-    pa.innerHTML = `
-      <button class="btn btn-primary" onclick="openAddServer()">
-        <span class="material-symbols-rounded">add</span> Aggiungi server
-      </button>`;
+    btns.push(`<button class="btn btn-primary" onclick="openAddServer()">
+      <span class="material-symbols-rounded">add</span> Aggiungi server
+    </button>`);
   }
+  if (can(session, 'manage_cluster')) {
+    btns.push(`<button class="btn btn-secondary" onclick="openCreateCluster()">
+      <span class="material-symbols-rounded">hub</span> Crea cluster
+    </button>`);
+  }
+  pa.innerHTML = btns.join('');
+
+  // Fix 5: Enter nel modal add server
+  document.getElementById('modal-add-server').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveServer(); }
+  });
+  document.getElementById('modal-create-cluster').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveCluster(); }
+  });
+
+  // Toggle password visibilità nel modal server
+  document.getElementById('srv-eye').addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const inp = document.getElementById('srv-pass');
+    const icon = document.getElementById('srv-eye-icon');
+    if (inp.type === 'password') { inp.type = 'text'; icon.textContent = 'visibility_off'; }
+    else { inp.type = 'password'; icon.textContent = 'visibility'; }
+  });
+
   await loadServers();
 }
 
@@ -153,38 +219,73 @@ function renderServers() {
   }
 
   const activeId = getActiveCred();
-  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">
-    ${SERVERS.map(s => `
-      <div class="server-card ${s.id === activeId ? 'active' : ''}">
-        <div class="server-icon"><span class="material-symbols-rounded">dns</span></div>
-        <div class="server-info">
-          <div class="server-name">
-            ${escapeHtml(s.name)}
-            ${s.id === activeId ? '<span class="chip chip-running">attivo</span>' : ''}
-          </div>
-          <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)} · ${escapeHtml(s.host)}:${s.port}</div>
-          <div class="server-meta">SSL: ${s.verify_ssl ? 'verifica abilitata' : 'self-signed'} · Creato: ${s.created_at ? s.created_at.slice(0, 10) : '-'}</div>
+  const cards = SERVERS.map(s => {
+    const isActive = s.id === activeId;
+    // Fix 2: bottone "Usa" e "Modifica" con icona+testo correttamente inline-flex
+    const usaBtn = !isActive ? `<button class="btn btn-sm btn-primary" onclick="setActive(${s.id})">
+      <span class="material-symbols-rounded">check_circle</span><span>Usa</span>
+    </button>` : '';
+    const editBtn = session.level === 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="openEditServer(${s.id})">
+      <span class="material-symbols-rounded">edit</span><span>Modifica</span>
+    </button>` : '';
+    const delBtn = session.level === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="removeServer(${s.id}, '${escapeHtml(s.name).replace(/'/g,'\\\'')}')" title="Rimuovi">
+      <span class="material-symbols-rounded">delete</span>
+    </button>` : '';
+
+    return `<div class="server-card ${isActive ? 'active' : ''}">
+      <div class="server-icon"><span class="material-symbols-rounded">dns</span></div>
+      <div class="server-info">
+        <div class="server-name">
+          ${escapeHtml(s.name)}
+          ${isActive ? '<span class="chip chip-running">attivo</span>' : ''}
         </div>
-        <div style="display:flex;gap:6px">
-          ${s.id !== activeId ? `<button class="btn btn-sm btn-primary" onclick="setActive(${s.id})">
-            <span class="material-symbols-rounded">check</span> Usa
-          </button>` : ''}
-          ${session.level === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="removeServer(${s.id},'${escapeHtml(s.name)}')">
-            <span class="material-symbols-rounded">delete</span>
-          </button>` : ''}
-        </div>
-      </div>`).join('')}
-  </div>`;
+        <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)} · ${escapeHtml(s.host)}:${s.port}</div>
+        <div class="server-meta">SSL: ${s.verify_ssl ? 'verifica abilitata' : 'self-signed'} · Creato: ${s.created_at ? s.created_at.slice(0, 10) : '-'}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        ${usaBtn}${editBtn}${delBtn}
+      </div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">${cards}</div>`;
 }
 
+// Fix 2 + Fix 4: apri modal per nuovo server
 function openAddServer() {
+  editingServerId = null;
+  document.getElementById('modal-server-title').innerHTML =
+    '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">dns</span> Aggiungi server Proxmox';
   document.getElementById('srv-name').value = '';
   document.getElementById('srv-host').value = '';
   document.getElementById('srv-port').value = '8006';
   document.getElementById('srv-user').value = 'root';
   document.getElementById('srv-realm').value = 'pam';
   document.getElementById('srv-pass').value = '';
+  document.getElementById('srv-pass').type = 'password';
+  document.getElementById('srv-eye-icon').textContent = 'visibility';
   document.getElementById('srv-ssl').checked = false;
+  document.getElementById('srv-pass-hint').style.display = 'none';
+  openModal('modal-add-server');
+}
+
+// Fix 4: apri modal per modifica server esistente
+function openEditServer(id) {
+  const s = SERVERS.find(s => s.id === id);
+  if (!s) return;
+  editingServerId = id;
+  document.getElementById('modal-server-title').innerHTML =
+    '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">edit</span> Modifica server Proxmox';
+  document.getElementById('srv-name').value = s.name || '';
+  document.getElementById('srv-host').value = s.host || '';
+  document.getElementById('srv-port').value = s.port || '8006';
+  document.getElementById('srv-user').value = s.pve_username || 'root';
+  document.getElementById('srv-realm').value = s.pve_realm || 'pam';
+  document.getElementById('srv-pass').value = '';
+  document.getElementById('srv-pass').type = 'password';
+  document.getElementById('srv-eye-icon').textContent = 'visibility';
+  document.getElementById('srv-ssl').checked = !!s.verify_ssl;
+  document.getElementById('srv-pass-hint').style.display = '';
   openModal('modal-add-server');
 }
 
@@ -198,19 +299,35 @@ async function saveServer() {
     password:     document.getElementById('srv-pass').value,
     verify_ssl:   document.getElementById('srv-ssl').checked,
   };
-  if (!payload.name || !payload.host || !payload.pve_username || !payload.password) {
-    showToast('Compila tutti i campi obbligatori', 'warning');
-    return;
-  }
-  try {
-    const s = await credsApi.create(payload);
-    showToast(`Server "${payload.name}" aggiunto`, 'success');
-    closeModal('modal-add-server');
-    // Make it active if no active credential yet
-    if (!getActiveCred()) setActiveCred(s.id);
-    await loadServers();
-  } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
+
+  if (editingServerId !== null) {
+    // Fix 4: aggiornamento — rimuovi password se vuota
+    if (!payload.password) delete payload.password;
+    if (!payload.name || !payload.host || !payload.pve_username) {
+      showToast('Compila tutti i campi obbligatori', 'warning'); return;
+    }
+    try {
+      await credsApi.update(editingServerId, payload);
+      showToast(`Server "${payload.name}" aggiornato`, 'success');
+      closeModal('modal-add-server');
+      await loadServers();
+    } catch (e) {
+      showToast('Errore: ' + e.message, 'danger');
+    }
+  } else {
+    // Nuovo server
+    if (!payload.name || !payload.host || !payload.pve_username || !payload.password) {
+      showToast('Compila tutti i campi obbligatori', 'warning'); return;
+    }
+    try {
+      const s = await credsApi.create(payload);
+      showToast(`Server "${payload.name}" aggiunto`, 'success');
+      closeModal('modal-add-server');
+      if (!getActiveCred()) setActiveCred(s.id);
+      await loadServers();
+    } catch (e) {
+      showToast('Errore: ' + e.message, 'danger');
+    }
   }
 }
 
@@ -229,6 +346,48 @@ async function removeServer(id, name) {
     await loadServers();
   } catch (e) {
     showToast('Errore: ' + e.message, 'danger');
+  }
+}
+
+// Fix 3: Creazione cluster
+function openCreateCluster() {
+  if (!SERVERS.length) {
+    showToast('Aggiungi almeno un server prima di creare un cluster', 'warning');
+    return;
+  }
+  document.getElementById('cl-name').value = '';
+  const primarySel = document.getElementById('cl-primary');
+  primarySel.innerHTML = SERVERS.map(s =>
+    `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.host)})</option>`
+  ).join('');
+
+  const nodesList = document.getElementById('cl-nodes-list');
+  nodesList.innerHTML = SERVERS.map(s => `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:6px 0">
+      <input type="checkbox" class="cl-node-cb" value="${s.id}" />
+      <span class="material-symbols-rounded" style="font-size:16px;color:var(--accent)">dns</span>
+      <span>${escapeHtml(s.name)}</span>
+      <span class="mono" style="color:var(--text-muted);font-size:11px">${escapeHtml(s.host)}</span>
+    </label>`).join('');
+
+  openModal('modal-create-cluster');
+}
+
+async function saveCluster() {
+  const name = document.getElementById('cl-name').value.trim();
+  if (!name) { showToast('Inserisci il nome del cluster', 'warning'); return; }
+  const primaryId = parseInt(document.getElementById('cl-primary').value);
+  const extraIds = Array.from(document.querySelectorAll('.cl-node-cb:checked')).map(cb => parseInt(cb.value));
+  const allNodeIds = [...new Set([primaryId, ...extraIds])];
+
+  try {
+    // Chiama l'API di creazione cluster (il backend gestisce la configurazione Proxmox)
+    await clusterApi.create({ name, primary_cred_id: primaryId, node_cred_ids: allNodeIds });
+    showToast(`Cluster "${name}" creato`, 'success');
+    closeModal('modal-create-cluster');
+    await refreshClusterData();
+  } catch (e) {
+    showToast('Errore creazione cluster: ' + e.message, 'danger');
   }
 }
 

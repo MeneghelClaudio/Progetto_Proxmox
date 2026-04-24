@@ -99,9 +99,12 @@ canvas.sparkline { width:100%; height:100%; }
 
     <div class="detail-layout" id="detail-layout">
       <div class="vm-list-panel">
-        <div class="vm-list-header">
-          <span class="material-symbols-rounded" style="font-size:16px">computer</span>
-          VM &amp; Container
+        <div class="vm-list-header" style="justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span class="material-symbols-rounded" style="font-size:16px">computer</span>
+            VM &amp; Container
+          </div>
+          <span id="vm-list-add-btn"></span>
         </div>
         <div class="vm-list-search">
           <input type="text" id="vm-search" placeholder="Cerca per nome o ID..." oninput="filterVMs(this.value)"/>
@@ -184,6 +187,63 @@ canvas.sparkline { width:100%; height:100%; }
         </div>
       </div>
     </div>
+    <!-- Fix 8: Modal crea VM/CT -->
+    <div class="modal-overlay hidden" id="modal-create-vm">
+      <div class="modal" style="max-width:520px">
+        <div class="modal-title" id="create-vm-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">add_circle</span>
+          Nuova Macchina Virtuale
+        </div>
+        <div class="modal-sub">Crea una nuova VM o container LXC sul nodo selezionato.</div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Tipo</label>
+            <select class="form-input" id="cvm-type" onchange="onCreateTypeChange()">
+              <option value="qemu">VM (QEMU/KVM)</option>
+              <option value="lxc">Container (LXC)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Nodo di destinazione</label>
+            <select class="form-input" id="cvm-node"></select>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">VMID</label>
+            <input type="number" class="form-input" id="cvm-vmid" placeholder="es. 101" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Nome</label>
+            <input type="text" class="form-input" id="cvm-name" placeholder="es. debian-web" />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">CPU (core)</label>
+            <input type="number" class="form-input" id="cvm-cpu" value="1" min="1" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">RAM (MB)</label>
+            <input type="number" class="form-input" id="cvm-mem" value="512" min="64" step="64" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Disco (GB)</label>
+          <input type="number" class="form-input" id="cvm-disk" value="8" min="1" />
+        </div>
+        <div class="form-group" id="cvm-os-group">
+          <label class="form-label">Storage</label>
+          <input type="text" class="form-input" id="cvm-storage" value="local-lvm" placeholder="es. local-lvm" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-create-vm')">Annulla</button>
+          <button class="btn btn-primary" onclick="executeCreateVM()">
+            <span class="material-symbols-rounded">add_circle</span> Crea
+          </button>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -209,6 +269,26 @@ async function init() {
   }
   DATA = await ensureClusterData();
   allVMs = DATA.vms;
+
+  // Fix 8: bottone "+" nella lista VM se ha permessi
+  if (can(session, 'clone')) {
+    document.getElementById('vm-list-add-btn').innerHTML =
+      `<button class="btn btn-sm btn-primary" onclick="openCreateVM()" title="Nuova VM/CT" style="padding:3px 8px">
+        <span class="material-symbols-rounded" style="font-size:15px">add</span>
+      </button>`;
+  }
+
+  // Fix 5: Enter nei modal
+  document.getElementById('modal-create-vm').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); executeCreateVM(); }
+  });
+  document.getElementById('modal-snapshot').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); executeSnapshot(); }
+  });
+  document.getElementById('modal-clone').addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); executeClone(); }
+  });
+
   renderVMList();
 
   const urlId = parseInt(new URLSearchParams(location.search).get('id'));
@@ -561,6 +641,60 @@ async function deleteSnap(name) {
     showToast('Snapshot eliminato', 'warning');
     await renderDetail(vm);
   } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+}
+
+// Fix 8: Crea VM/CT
+function openCreateVM() {
+  const sel = document.getElementById('cvm-node');
+  sel.innerHTML = DATA.nodes.map(n => `<option value="${n.id}">${escapeHtml(n.name)}</option>`).join('');
+  document.getElementById('cvm-vmid').value = '';
+  document.getElementById('cvm-name').value = '';
+  document.getElementById('cvm-type').value = 'qemu';
+  document.getElementById('cvm-cpu').value = '1';
+  document.getElementById('cvm-mem').value = '512';
+  document.getElementById('cvm-disk').value = '8';
+  document.getElementById('cvm-storage').value = 'local-lvm';
+  document.getElementById('create-vm-title').innerHTML =
+    '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">computer</span> Nuova Macchina Virtuale';
+  openModal('modal-create-vm');
+}
+
+function onCreateTypeChange() {
+  const isLxc = document.getElementById('cvm-type').value === 'lxc';
+  document.getElementById('create-vm-title').innerHTML = isLxc
+    ? '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">deployed_code</span> Nuovo Container LXC'
+    : '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">computer</span> Nuova Macchina Virtuale';
+}
+
+async function executeCreateVM() {
+  const kind = document.getElementById('cvm-type').value;
+  const node = document.getElementById('cvm-node').value;
+  const vmid = parseInt(document.getElementById('cvm-vmid').value);
+  const name = document.getElementById('cvm-name').value.trim();
+  const cores = parseInt(document.getElementById('cvm-cpu').value) || 1;
+  const memory = parseInt(document.getElementById('cvm-mem').value) || 512;
+  const disk = parseInt(document.getElementById('cvm-disk').value) || 8;
+  const storage = document.getElementById('cvm-storage').value.trim() || 'local-lvm';
+
+  if (!vmid || !name) { showToast('Inserisci VMID e nome', 'warning'); return; }
+
+  const credId = getActiveCred();
+  const payload = kind === 'qemu'
+    ? { vmid, name, cores, memory, scsi0: `${storage}:${disk}`, ostype: 'l26', scsihw: 'virtio-scsi-pci' }
+    : { vmid, hostname: name, cores, memory, rootfs: `${storage}:${disk}` };
+
+  try {
+    await apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/create`, { method: 'POST', body: payload });
+    showToast(`${kind === 'qemu' ? 'VM' : 'Container'} "${name}" (${vmid}) creato`, 'success');
+    closeModal('modal-create-vm');
+    setTimeout(async () => {
+      await refreshClusterData();
+      DATA = CLUSTER_DATA; allVMs = DATA.vms;
+      renderVMList(document.getElementById('vm-search').value);
+    }, 1500);
+  } catch (e) {
+    showToast('Errore: ' + e.message, 'danger');
+  }
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }

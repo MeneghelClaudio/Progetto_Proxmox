@@ -1,9 +1,18 @@
-- [ ] mostra password in login non funziona (da implementare)
-- [ ] bottone creazione server (-> dashboard) errore di visualizzazione simbolo+scritta
-- [ ] manca creazione cluster
-- [ ] cambiare info server + ip al posto di eliminarlo
-- [ ] se si preme invio invia le info automaticamente (es. quando crei un server)
-- [ ] uso di server: si vede soltanto il server attivo (si vedono nei nodi ma scomodo)
-- [ ] nella parte di sinistra, la parte "insfrastruttura" non si può interagire (non si espande e collassa niente)
-- [ ] nella voce "vm e container" non si possono aggiungere vm o container
-- [ ] dischi per singolo server: si vede %disco ma non si sa quanti dischi e da quanti GB
+- span eye-icon in login è spostato a destra rispetto alla location del button (deve essere dentro input password)
+- span srv-eye in servers.html, il bottone del mostra password è tutto a destra (bottone + span) invece deve essere dentro input srv-pass
+- bottone creazione server (-> dashboard) errore di visualizzazione simbolo+scritta
+- manca creazione cluster: aggiungere voce "gestione cluster" sulla parte di destra con pagina dedicata alla creazione di cluster (crei cluster, poi vedi un contenitore con il cluster e con drag&drop i server fanno join al cluster, vedere come gestire le info di join... + creazione dischi ecc)
+- uso di server: si vede soltanto il server attivo (si vedono nei nodi ma scomodo)
+- nella parte di sinistra, la parte "insfrastruttura" non si può interagire (non va espande/collassa) + mostra solo il server attivo con relativo cluster e non va bene (deve mostrare tutto!!!)
+- migrazione vm/container: 2026-04-24 11:00:45 2651258880 bytes (2.7 GB, 2.5 GiB) copied, 39 s, 68.0 MB/s (non so cosa sia)
+- migrazione vm/container: l'oggetto in trasferimento dovrebbe vedersi sul server di destinazione con il bordo tratteggiato
+- creazione di una vm -> Errore: Method Not Allowed (?)
+- manca pagina di caricamento file (iso vm/ct) su disco del server
+- creazione vm/ct -> opzione di caricamento file o tramite selezione da disco server oppure carico io il file dal pc e in automatico salva su disco e crea la vm/ct + OPZIONI (server, id, nome, disco, file iso, os+versione, virtio drivers!!!, bios/efi/tpm, size+disco server, spunta discard, sockets+core + ram + rete)
+- CLONE: vm funziona se spenta (se accesa boh), ct non funziona mai (error: internal server error) (test: vm spenta sì, ct mai)
+- MIGRAZIONE: funziona con i ct (lento), non funziona con vm (error: migration aborted dopo un paio di secondi)
+- eliminazione vm/ct: non mi piace l'inserimento del nome (metti come hint il nome della vm/ct o permetti copia del nome + secondo me meglio mettere anche l'id)
+- creazione vm errore lato proxmox non interfaccia (max 1 vcpu + altro (kvm, qemu))
+- VISUALIZZAZIONE ERRORI DETTAGLIATA COME SU PROXMOX (DETTAGLI COME SI VEDE SU TASKS/CLUSTER LOG IN BASSO)
+- mostrare messaggi in basso a destra, anche con rotella di caricamento e refresh automatico appena ha finito (sempre come tasks/cluster log di proxmox)
+- in storico live (vm/ct), la legenda CPU RAM devono essere sopra al grafico, altrimenti non si vedono

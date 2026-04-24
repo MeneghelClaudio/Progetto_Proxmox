@@ -119,9 +119,10 @@ const usersApi = {
 // ---------- Credentials API (Proxmox servers) ----------
 
 const credsApi = {
-  list:   ()         => apiRequest('/api/credentials'),
-  create: (payload)  => apiRequest('/api/credentials', { method: 'POST', body: payload }),
-  remove: (id)       => apiRequest(`/api/credentials/${id}`, { method: 'DELETE' }),
+  list:   ()           => apiRequest('/api/credentials'),
+  create: (payload)    => apiRequest('/api/credentials', { method: 'POST', body: payload }),
+  update: (id, patch)  => apiRequest(`/api/credentials/${id}`, { method: 'PATCH', body: patch }),
+  remove: (id)         => apiRequest(`/api/credentials/${id}`, { method: 'DELETE' }),
 };
 
 // ---------- Cluster / nodes API ----------
@@ -131,6 +132,7 @@ const clusterApi = {
   status: (credId)                   => apiRequest(`/api/clusters/${credId}/status`),
   node:   (credId, node)             => apiRequest(`/api/clusters/${credId}/nodes/${node}`),
   nodeRrd:(credId, node, tf='hour')  => apiRequest(`/api/clusters/${credId}/nodes/${node}/rrd?timeframe=${tf}`),
+  create: (payload)                  => apiRequest('/api/clusters', { method: 'POST', body: payload }),
 };
 
 // ---------- VM / CT API ----------
@@ -205,6 +207,16 @@ function normalizeTree(tree) {
       cpu: cpuPct,
       mem: memPct,
       disk: diskPct,
+      // Fix 9: dettaglio dischi per nodo
+      disks: (n.storages || []).map(s => ({
+        name: s.storage || s.id || '?',
+        sizeGB: s.total ? Math.round(s.total / (1024 ** 3)) : 0,
+        usedGB: s.used  ? Math.round(s.used  / (1024 ** 3)) : 0,
+        pct: s.total && s.used ? Math.round(s.used / s.total * 100) : 0,
+        type: s.type || 'dir',
+      })),
+      diskTotalGB: diskTotal ? Math.round(diskTotal / (1024 ** 3)) : 0,
+      diskUsedGB:  diskUsed  ? Math.round(diskUsed  / (1024 ** 3)) : 0,
       uptime: fmtUptime(n.uptime),
       vms: (n.vms || []).length,
       cts: (n.cts || []).length,

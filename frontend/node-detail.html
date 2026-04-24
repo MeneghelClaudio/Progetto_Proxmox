@@ -143,7 +143,23 @@ function renderNode() {
           <span class="material-symbols-rounded" style="font-size:18px;color:var(--warning)">hard_drive</span>
         </div>
         <div class="ring-wrap">${makeRing(node.disk, barColor(node.disk))}</div>
-        <div class="metric-detail">Utilizzo storage locale</div>
+        <div class="metric-detail">
+          ${node.diskUsedGB !== undefined
+            ? `${node.diskUsedGB} GB / ${node.diskTotalGB} GB usati`
+            : `${node.disk}% utilizzo`}
+        </div>
+        ${node.disks && node.disks.length ? `
+        <div style="margin-top:8px;display:flex;flex-direction:column;gap:4px">
+          ${node.disks.map(d => `
+            <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px">
+              <span style="color:var(--text-muted);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:90px" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
+              <span style="color:var(--text-dim)">${d.type}</span>
+              <span style="color:${barColor(d.pct)};font-family:var(--mono);font-weight:600">${d.usedGB}/${d.sizeGB}GB</span>
+            </div>
+            <div style="height:2px;border-radius:2px;background:var(--surface3);margin-bottom:2px">
+              <div style="height:100%;border-radius:2px;width:${d.pct}%;background:${barColor(d.pct)}"></div>
+            </div>`).join('')}
+        </div>` : ''}
       </div>
       <div class="metric-card" style="justify-content:space-between">
         <div class="metric-header"><span class="metric-label">Stato</span></div>
@@ -221,6 +237,16 @@ async function vmAction(action, kind, node, vmid) {
     showToast('Errore: ' + e.message, 'danger');
   }
 }
+
+  // Fix 5: Enter sul selettore nodo non serve (è click), ma assicuriamoci
+  // che nessun form nascosto intercetti Enter e ricarichi la pagina
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+      // Non fare nulla di default per evitare ricaricamenti indesiderati
+      const activeModal = document.querySelector('.modal-overlay:not(.hidden)');
+      if (!activeModal) e.preventDefault();
+    }
+  });
 
 init();
 </script>

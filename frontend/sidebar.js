@@ -105,25 +105,27 @@ function renderSidebarTree(activePage, session) {
 
   let html = '';
 
-  // Clusters
-  data.clusters.forEach(cluster => {
-    html += `<div class="tree-item" onclick="this.nextElementSibling.classList.toggle('hidden')">
+  // Fix 7: usa id univoci per toggle espandi/collassa
+  data.clusters.forEach((cluster, ci) => {
+    const cid = `tree-cl-${ci}`;
+    html += `<div class="tree-item" style="cursor:pointer" onclick="document.getElementById('${cid}').classList.toggle('hidden')">
       <span class="tree-expand"><span class="material-symbols-rounded" style="font-size:14px">expand_more</span></span>
       <span class="material-symbols-rounded ti-icon" style="color:var(--info)">hub</span>
       <span class="ti-label">${escapeHtml(cluster.name)}</span>
       <span class="ti-badge">${cluster.nodes.length}</span>
     </div>`;
     const clusterNodes = data.nodes.filter(n => cluster.nodes.includes(n.id));
-    html += `<div class="tree-cluster-children">`;
-    clusterNodes.forEach(node => {
+    html += `<div id="${cid}" class="tree-cluster-children">`;
+    clusterNodes.forEach((node, ni) => {
+      const nid = `tree-nd-${ci}-${ni}`;
       const nodeVMs = data.vms.filter(v => v.node === node.id);
-      html += `<div class="tree-item l1" onclick="(function(e){e.stopPropagation();}).call(this,event);this.nextElementSibling.classList.toggle('hidden')">
+      html += `<div class="tree-item l1" style="cursor:pointer" onclick="event.stopPropagation();document.getElementById('${nid}').classList.toggle('hidden')">
         <span class="tree-expand"><span class="material-symbols-rounded" style="font-size:14px">expand_more</span></span>
         <span class="material-symbols-rounded ti-icon" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
         <span class="ti-label">${escapeHtml(node.name)}</span>
         <span class="ti-badge">${nodeVMs.length}</span>
       </div>`;
-      html += `<div class="tree-node-children">`;
+      html += `<div id="${nid}" class="tree-node-children">`;
       nodeVMs.forEach(vm => {
         html += `<a href="vm-detail.html?id=${vm.id}" class="tree-item l2">
           <span class="tree-expand"></span>
@@ -144,15 +146,38 @@ function renderSidebarTree(activePage, session) {
   const standaloneNodes = data.nodes.filter(n => !clusterNodeIds.includes(n.id));
   if (standaloneNodes.length) {
     html += `<div class="nav-section-title">Nodi standalone</div>`;
-    standaloneNodes.forEach(node => {
-      html += `<a href="node-detail.html?id=${node.id}" class="tree-item">
-        <span class="material-symbols-rounded ti-icon" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
-        <span class="ti-label">${escapeHtml(node.name)}</span>
-      </a>`;
+    standaloneNodes.forEach((node, ni) => {
+      const nid = `tree-sa-${ni}`;
+      const nodeVMs = data.vms.filter(v => v.node === node.id);
+      if (nodeVMs.length) {
+        html += `<div class="tree-item" style="cursor:pointer" onclick="document.getElementById('${nid}').classList.toggle('hidden')">
+          <span class="tree-expand"><span class="material-symbols-rounded" style="font-size:14px">expand_more</span></span>
+          <span class="material-symbols-rounded ti-icon" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
+          <span class="ti-label">${escapeHtml(node.name)}</span>
+          <span class="ti-badge">${nodeVMs.length}</span>
+        </div>
+        <div id="${nid}" class="tree-node-children">`;
+        nodeVMs.forEach(vm => {
+          html += `<a href="vm-detail.html?id=${vm.id}" class="tree-item l2">
+            <span class="tree-expand"></span>
+            <span class="material-symbols-rounded ti-icon" style="color:${vm.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">
+              ${vm.type === 'vm' ? 'computer' : 'deployed_code'}
+            </span>
+            <span class="ti-label">${escapeHtml(vm.name)}</span>
+            <span class="ti-badge">${vm.id}</span>
+          </a>`;
+        });
+        html += `</div>`;
+      } else {
+        html += `<a href="node-detail.html?id=${node.id}" class="tree-item">
+          <span class="material-symbols-rounded ti-icon" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
+          <span class="ti-label">${escapeHtml(node.name)}</span>
+        </a>`;
+      }
     });
   }
 
-  // Backup servers / targets
+  // Backup servers
   if (data.backupServers.length) {
     html += `<div class="nav-section-title" style="margin-top:8px">Backup Storage</div>`;
     data.backupServers.forEach(bs => {
