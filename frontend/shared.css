@@ -442,3 +442,88 @@ tbody tr:hover td { background: var(--surface2); }
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 .ms-fill { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
+/* ---------- Error modal (Proxmox-style) ---------- */
+.pmx-error-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 9000;
+  display: none; align-items: center; justify-content: center; padding: 16px;
+}
+.pmx-error-overlay.open { display: flex; }
+.pmx-error-modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  width: 100%; max-width: 640px; max-height: 80vh; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.5);
+}
+.pmx-error-header {
+  display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.pmx-error-close {
+  background: none; border: none; cursor: pointer; padding: 4px;
+  color: var(--text-muted); display: flex; align-items: center;
+}
+.pmx-error-close:hover { color: var(--text); }
+.pmx-error-body { padding: 16px; overflow-y: auto; flex: 1; }
+.pmx-error-pre {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; font-family: var(--mono); font-size: 11px; color: var(--text-muted);
+  margin-top: 8px; max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.pmx-error-footer {
+  display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Tasks/cluster log panel ---------- */
+.pmx-tasks-panel { position: fixed; right: 16px; bottom: 16px; z-index: 5000; }
+.pmx-tasks-fab {
+  position: relative; width: 44px; height: 44px; border-radius: 50%;
+  background: var(--accent); color: #fff; border: none; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center;
+  transition: transform .15s;
+}
+.pmx-tasks-fab:hover { transform: scale(1.05); }
+.pmx-tasks-badge {
+  position: absolute; top: -4px; right: -4px;
+  background: var(--danger); color: #fff;
+  font-size: 10px; font-weight: 700;
+  min-width: 18px; height: 18px; border-radius: 9px;
+  padding: 0 5px; display: flex; align-items: center; justify-content: center;
+}
+.pmx-tasks-window {
+  position: absolute; bottom: 56px; right: 0;
+  width: 360px; max-height: 480px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.pmx-tasks-header {
+  display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  border-bottom: 1px solid var(--border); background: var(--surface2);
+}
+.pmx-tasks-icon {
+  background: none; border: none; cursor: pointer; padding: 4px;
+  color: var(--text-muted); display: flex; align-items: center; border-radius: 4px;
+}
+.pmx-tasks-icon:hover { background: var(--surface3); color: var(--text); }
+.pmx-tasks-list { flex: 1; overflow-y: auto; padding: 4px 0; max-height: 420px; }
+.pmx-task-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+}
+.pmx-task-row:last-child { border-bottom: none; }
+.pmx-task-row:hover { background: var(--surface2); }
+@keyframes pmx-spin { to { transform: rotate(360deg); } }
+.pmx-spin { animation: pmx-spin 1.2s linear infinite; transform-origin: center; }
+.hidden { display: none !important; }
+
+/* ---------- Migration target highlight (dashed border) ---------- */
+.migration-target-highlight {
+  border: 2px dashed var(--accent) !important;
+  animation: pmx-dash-pulse 1.4s ease-in-out infinite;
+}
+@keyframes pmx-dash-pulse {
+  0%,100% { box-shadow: 0 0 0 0 var(--accent-dim); }
+  50%     { box-shadow: 0 0 0 8px transparent; }
+}

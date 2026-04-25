@@ -68,6 +68,17 @@
 }
 .empty-state .material-symbols-rounded { font-size:48px; color:var(--text-dim); margin-bottom:12px; }
 .empty-state h3 { font-size:16px; font-weight:700; margin-bottom:8px; color:var(--text); }
+
+.page-actions-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.active-srv-pill {
+  display:inline-flex; align-items:center; gap:8px;
+  padding:6px 12px; border-radius:20px;
+  background:var(--surface2); border:1px solid var(--border);
+  font-size:12px; color:var(--text-muted);
+}
+.active-srv-pill .sep { color:var(--text-dim); }
+.active-srv-pill .dim { color:var(--text-dim); }
+.active-srv-pill .mono { font-family:var(--mono); }
 </style>
 </head>
 <body>
@@ -131,26 +142,31 @@ async function init() {
   DATA = await ensureClusterData();
 
   if (can(session, 'add_server')) {
-    // Fix 6: mostra server attivo con nome + IP accanto al bottone
+    // Active-server pill + clearly labelled actions
     let activeSrvLabel = '';
     try {
       const creds = await credsApi.list();
       const activeId = getActiveCred();
       const activeSrv = creds.find(c => c.id === activeId);
       if (activeSrv) {
-        activeSrvLabel = `<span style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
-          <span class="material-symbols-rounded" style="font-size:14px;color:var(--success)">circle</span>
-          <span class="mono">${activeSrv.name}</span>
-          <span style="color:var(--text-dim)">·</span>
-          <span class="mono" style="color:var(--text-dim)">${activeSrv.host}:${activeSrv.port}</span>
+        activeSrvLabel = `<span class="active-srv-pill" title="Server attivo">
+          <span class="status-dot running"></span>
+          <span class="mono">${escapeHtml(activeSrv.name)}</span>
+          <span class="sep">·</span>
+          <span class="mono dim">${escapeHtml(activeSrv.host)}:${activeSrv.port}</span>
         </span>`;
       }
     } catch {}
     document.getElementById('page-actions').innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px">
+      <div class="page-actions-row">
         ${activeSrvLabel}
         <a href="servers.html" class="btn btn-secondary">
-          <span class="material-symbols-rounded">dns</span> Server
+          <span class="material-symbols-rounded">dns</span>
+          <span>Gestisci Server</span>
+        </a>
+        <a href="servers.html?new=1" class="btn btn-primary">
+          <span class="material-symbols-rounded">add</span>
+          <span>Aggiungi Server</span>
         </a>
       </div>`;
   }

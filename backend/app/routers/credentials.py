@@ -5,7 +5,7 @@ from typing import List
 from ..database import get_db
 from ..auth import get_current_user
 from ..models import User, ProxmoxCredential
-from ..schemas import CredentialIn, CredentialOut
+from ..schemas import CredentialIn, CredentialOut, CredentialUpdate
 from ..crypto import encrypt_password
 
 
@@ -43,6 +43,39 @@ def create_credential(
     except Exception:
         db.rollback()
         raise HTTPException(400, "A credential with that name already exists")
+    db.refresh(cred)
+    return cred
+
+
+@router.patch("/{cred_id}", response_model=CredentialOut)
+def update_credential(
+    cred_id: int,
+    payload: CredentialUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.role not in ("admin", "senior"):
+        raise HTTPException(403, "Admin or senior required to edit servers")
+    cred = db.query(ProxmoxCredential).filter(
+        ProxmoxCredential.id == cred_id,
+        ProxmoxCredential.user_id == user.id,
+    ).first()
+    if not cred:
+        raise HTTPException(404, "Not found")
+
+    if payload.name is not None:        cred.name = payload.name
+    if payload.host is not None:        cred.host = payload.host
+    if payload.port is not None:        cred.port = payload.port
+    if payload.pve_username is not None:cred.pve_username = payload.pve_username
+    if payload.pve_realm is not None:   cred.pve_realm = payload.pve_realm
+    if payload.verify_ssl is not None:  cred.verify_ssl = payload.verify_ssl
+    if payload.password:                cred.encrypted_password = encrypt_password(payload.password)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(400, "Update failed (duplicate name?)")
     db.refresh(cred)
     return cred
 
