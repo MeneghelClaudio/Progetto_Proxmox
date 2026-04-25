@@ -92,22 +92,60 @@ def vm_delete(px, node, vmid, kind="qemu", purge: bool = True):
 
 def vm_clone(px, node, vmid, newid: int, kind="qemu",
              target: Optional[str] = None, name: Optional[str] = None, full: bool = True):
-    params: dict[str, Any] = {"newid": newid, "full": 1 if full else 0}
+    """
+    Clone a VM/CT. For LXC, Proxmox doesn't support full clone of a *running*
+    container without an existing snapshot — we degrade to a linked clone in
+    that case (full=0) which the Proxmox API accepts.
+    """
+    params: dict[str, Any] = {"newid": newid}
     if target: params["target"] = target
-    if name:   params["name"] = name
+    if name:
+        # For LXC the keyword is `hostname`, for QEMU it's `name`
+        if kind == "lxc":
+            params["hostname"] = name
+        else:
+            params["name"] = name
+
+    if kind == "qemu":
+        params["full"] = 1 if full else 0
+    else:
+        # LXC: pick a sensible default depending on the source state.
+        try:
+            cur = _branch(px, node, vmid, "lxc").status.current.get()
+            running = (cur or {}).get("status") == "running"
+        except Exception:
+            running = False
+        # Full clones of a running LXC fail unless a frozen snapshot exists.
+        # Linked clones (full=0) work in both stopped and running states.
+        params["full"] = 0 if running else (1 if full else 0)
+
     return _branch(px, node, vmid, kind).clone.post(**params)
 
 
 def vm_migrate(px, node, vmid, target_node: str, kind: str = "qemu",
-               online: bool = True, with_local_disks: bool = True) -> str:
-    """Returns the UPID of the migration task."""
+               online: bool = True, with_local_disks: bool = True,
+               target_storage: Optional[str] = None) -> str:
+    """
+    Returns the UPID of the migration task.
+
+    For QEMU online migration with local disks, Proxmox requires an explicit
+    `targetstorage` mapping when no shared storage is available. We default
+    to `local-lvm` if the caller didn't pass one.
+    """
     params: dict[str, Any] = {"target": target_node}
     if kind == "qemu":
         params["online"] = 1 if online else 0
         if with_local_disks:
             params["with-local-disks"] = 1
+            # When migrating with local disks, give Proxmox a target storage hint.
+            # Empty string means "use the same storage name on the destination".
+            if target_storage is not None:
+                params["targetstorage"] = target_storage
     else:  # lxc
+        # LXC cannot live-migrate; restart it on the destination.
         params["restart"] = 1
+        if online:
+            params["restart"] = 1
     return _branch(px, node, vmid, kind).migrate.post(**params)
 
 

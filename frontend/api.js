@@ -144,11 +144,22 @@ const credsApi = {
 // ---------- Cluster / nodes API ----------
 
 const clusterApi = {
-  tree:   (credId)                   => apiRequest(`/api/clusters/${credId}/tree`),
-  status: (credId)                   => apiRequest(`/api/clusters/${credId}/status`),
-  node:   (credId, node)             => apiRequest(`/api/clusters/${credId}/nodes/${node}`),
-  nodeRrd:(credId, node, tf='hour')  => apiRequest(`/api/clusters/${credId}/nodes/${node}/rrd?timeframe=${tf}`),
-  create: (payload)                  => apiRequest('/api/clusters', { method: 'POST', body: payload }),
+  tree:     (credId)                  => apiRequest(`/api/clusters/${credId}/tree`),
+  allTrees: ()                        => apiRequest('/api/clusters/all'),
+  status:   (credId)                  => apiRequest(`/api/clusters/${credId}/status`),
+  node:     (credId, node)            => apiRequest(`/api/clusters/${credId}/nodes/${node}`),
+  nodeRrd:  (credId, node, tf='hour') => apiRequest(`/api/clusters/${credId}/nodes/${node}/rrd?timeframe=${tf}`),
+  create:   (payload)                 => apiRequest('/api/clusters', { method: 'POST', body: payload }),
+  join:     (credId, payload)         => apiRequest(`/api/clusters/${credId}/cluster/join`, { method: 'POST', body: payload }),
+  resources:(credId, node)            => apiRequest(`/api/clusters/${credId}/nodes/${node}/resources`),
+};
+
+// ---------- Create VM / CT API ----------
+
+const createApi = {
+  resources: (credId, node)            => apiRequest(`/api/clusters/${credId}/nodes/${node}/resources`),
+  vm:        (credId, node, payload)   => apiRequest(`/api/clusters/${credId}/nodes/${node}/qemu`, { method: 'POST', body: payload }),
+  ct:        (credId, node, payload)   => apiRequest(`/api/clusters/${credId}/nodes/${node}/lxc`,  { method: 'POST', body: payload }),
 };
 
 // ---------- VM / CT API ----------
@@ -161,8 +172,8 @@ const vmsApi = {
   shutdown: (credId, kind, node, vmid)            => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/shutdown`, { method: 'POST' }),
   reboot:   (credId, kind, node, vmid)            => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/reboot`,   { method: 'POST' }),
   clone:    (credId, kind, node, vmid, payload) => {
-    // LXC clone: Proxmox non supporta full clone via API standard → forza full=0
-    if (kind === 'lxc') payload = { ...payload, full: false };
+    // LXC clone non richiede `full` esplicito; lasciamo che il backend
+    // applichi i default appropriati al tipo di storage rilevato.
     return apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/clone`, { method: 'POST', body: payload });
   },
   remove:   (credId, kind, node, vmid, confirmName)=>apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/delete`,   { method: 'POST', body: { confirm_name: confirmName } }),
@@ -267,7 +278,9 @@ function normalizeTree(tree) {
         sizeGB: s.total ? Math.round(s.total / (1024 ** 3)) : 0,
         usedGB: s.used  ? Math.round(s.used  / (1024 ** 3)) : 0,
         pct: s.total && s.used ? Math.round(s.used / s.total * 100) : 0,
-        type: s.type || 'dir',
+        type: s.plugintype || 'dir',
+        content: s.content || '',
+        shared: !!s.shared,
       })),
       diskTotalGB: diskTotal ? Math.round(diskTotal / (1024 ** 3)) : 0,
       diskUsedGB:  diskUsed  ? Math.round(diskUsed  / (1024 ** 3)) : 0,

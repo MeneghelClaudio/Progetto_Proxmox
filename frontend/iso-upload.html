@@ -131,16 +131,28 @@ let DATA = null;
 async function init() {
   await buildSidebar('isoupload');
   const credId = await ensureActiveCred();
-  if (!credId) return;
+  if (!credId) {
+    document.getElementById('sel-node').innerHTML = '<option value="">— nessun server configurato —</option>';
+    return;
+  }
   DATA = await ensureClusterData();
   const nodeSel = document.getElementById('sel-node');
+  nodeSel.innerHTML = '<option value="">— seleziona nodo —</option>';
+  if (!DATA || !DATA.nodes.length) {
+    nodeSel.innerHTML = '<option value="">— nessun nodo disponibile —</option>';
+    return;
+  }
   DATA.nodes.forEach(n => {
     const o = document.createElement('option');
-    o.value = n.id; o.textContent = n.name;
+    o.value = n.id;
+    o.textContent = n.status === 'running' ? n.name : `${n.name} (offline)`;
+    o.disabled = n.status !== 'running';
     nodeSel.appendChild(o);
   });
-  if (DATA.nodes.length) {
-    nodeSel.value = DATA.nodes[0].id;
+  // Pre-select first online node
+  const firstOnline = DATA.nodes.find(n => n.status === 'running');
+  if (firstOnline) {
+    nodeSel.value = firstOnline.id;
     await onNodeChange();
   }
 }
@@ -150,16 +162,44 @@ async function onNodeChange() {
   const storageSel = document.getElementById('sel-storage');
   storageSel.innerHTML = '<option value="">Caricamento…</option>';
   if (!node) return;
-  const nodeObj = DATA.nodes.find(n => n.id === node);
-  const storages = (nodeObj?.disks || []).filter(d => ['dir','nfs','cephfs','glusterfs','btrfs','lvm','lvmthin','zfspool','zdir'].includes(d.type));
 
-  if (storages.length) {
-    storageSel.innerHTML = storages.map(s =>
-      `<option value="${escapeHtml(s.name)}">${escapeHtml(s.name)} (${s.type}) — ${s.usedGB}/${s.sizeGB}GB</option>`
-    ).join('');
-  } else {
-    // Fallback: storage comuni di default
-    storageSel.innerHTML = `<option value="local">local</option><option value="local-lvm">local-lvm</option>`;
+  // Use the per-node /resources endpoint — it returns storages already
+  // categorised by content (iso, vztmpl, images, rootdir).
+  try {
+    const credId = getActiveCred();
+    const res = await createApi.resources(credId, node);
+    const isoStorages = res?.storages?.iso     || [];
+    const tmplStorages = res?.storages?.ct_tmpl || [];
+    // Union of iso + vztmpl-capable storages, deduped by name
+    const map = new Map();
+    [...isoStorages, ...tmplStorages].forEach(s => {
+      const name = s.storage;
+      if (!name || map.has(name)) return;
+      map.set(name, s);
+    });
+    const list = [...map.values()];
+    if (!list.length) {
+      // Fallback: show ALL storages so the user is never stuck
+      const all = res?.storages?.all || [];
+      if (all.length) {
+        storageSel.innerHTML = '<option value="">— seleziona storage —</option>' + all.map(s => {
+          const used = s.disk ? Math.round(s.disk / 1024**3) : 0;
+          const total = s.maxdisk ? Math.round(s.maxdisk / 1024**3) : 0;
+          return `<option value="${escapeHtml(s.storage)}">${escapeHtml(s.storage)} (${escapeHtml(s.plugintype || s.type || '?')}) — ${used}/${total}GB</option>`;
+        }).join('');
+      } else {
+        storageSel.innerHTML = '<option value="local">local</option>';
+      }
+    } else {
+      storageSel.innerHTML = '<option value="">— seleziona storage —</option>' + list.map(s => {
+        const used = s.disk ? Math.round(s.disk / 1024**3) : 0;
+        const total = s.maxdisk ? Math.round(s.maxdisk / 1024**3) : 0;
+        return `<option value="${escapeHtml(s.storage)}">${escapeHtml(s.storage)} (${escapeHtml(s.plugintype || s.type || '?')}) — ${used}/${total}GB</option>`;
+      }).join('');
+    }
+  } catch (e) {
+    storageSel.innerHTML = '<option value="local">local</option>';
+    showToast(`Errore caricamento storage: ${e.message}`, 'danger', { detail: e.detail });
   }
   await loadIsoList();
 }

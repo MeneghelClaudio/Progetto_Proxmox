@@ -220,6 +220,26 @@ async function onDrop(e, zone) {
   const vmEl = document.querySelector(`.vm-drag-item[data-vm-id="${vm.id}"]`);
   if (vmEl) vmEl.classList.add('migrating');
 
+  // Evidenzia anche il nodo di destinazione (bordo tratteggiato)
+  const destZone = document.querySelector(`.drop-zone-body[data-node-id="${targetNode}"]`)?.closest('.node-drop-zone');
+  if (destZone) destZone.classList.add('migration-target-highlight');
+
+  // Mostra una "ghost" della VM in migrazione sul nodo di destinazione
+  const destBody = document.querySelector(`.drop-zone-body[data-node-id="${targetNode}"]`);
+  if (destBody) {
+    const ghost = document.createElement('div');
+    ghost.className = 'vm-drag-item migrating';
+    ghost.id = `ghost-vm-${vm.id}`;
+    ghost.innerHTML = `
+      <span class="material-symbols-rounded vdi-icon" style="color:var(--info)">${vm.type === 'vm' ? 'computer' : 'deployed_code'}</span>
+      <div class="vdi-info">
+        <div class="vdi-name">${escapeHtml(vm.name)} <span style="color:var(--text-dim);font-size:11px">(in arrivo)</span></div>
+        <div class="vdi-meta">${vm.type.toUpperCase()} · ${vm.id}</div>
+      </div>
+      <span class="chip chip-paused" style="flex-shrink:0">migrating</span>`;
+    destBody.appendChild(ghost);
+  }
+
   const online = vm.status === 'running';
   const toastId = showTaskToast(
     `Migrazione ${vm.type.toUpperCase()} ${vm.name} → ${targetNode}…`
@@ -241,6 +261,8 @@ async function onDrop(e, zone) {
     addLog(`Errore migrazione ${vm.name}: ${err.message}${detail ? ' — ' + detail : ''}`, 'error');
     migratingVMs.delete(vm.id);
     if (vmEl) vmEl.classList.remove('migrating');
+    clearMigrationHighlight(vm.id, targetNode);
+    showErrorModal(`Errore migrazione ${vm.name}`, err.message, detail);
   }
 
   draggedVM = null;
@@ -254,6 +276,15 @@ function addLog(msg, type = 'info') {
   div.className = 'log-entry';
   div.innerHTML = `<span class="log-time">${now}</span><span class="log-msg ${type}">${escapeHtml(msg)}</span>`;
   scroll.insertBefore(div, scroll.firstChild);
+}
+
+function clearMigrationHighlight(vmid, targetNode) {
+  const ghost = document.getElementById(`ghost-vm-${vmid}`);
+  if (ghost) ghost.remove();
+  if (targetNode) {
+    const destZone = document.querySelector(`.drop-zone-body[data-node-id="${targetNode}"]`)?.closest('.node-drop-zone');
+    if (destZone) destZone.classList.remove('migration-target-highlight');
+  }
 }
 
 function parseMigrateLog(msg) {
@@ -291,6 +322,10 @@ async function startTaskPolling() {
               : `Migrazione fallita: ${vm?.name || vmid} — ${task.message || ''}`,
             success ? 'success' : 'error'
           );
+          if (!success) {
+            showErrorModal(`Migrazione fallita: ${vm?.name || vmid}`, task.message || 'Errore sconosciuto', task.message);
+          }
+          clearMigrationHighlight(vmid, info.targetNode);
           migratingVMs.delete(vmid);
         }
       });
