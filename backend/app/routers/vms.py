@@ -22,6 +22,7 @@ from ..proxmox_client import (
     vm_update_config,
 )
 from ..tasks import start_migration, poll_migration
+from ..state import bump_revision
 
 
 router = APIRouter(prefix="/api/clusters/{cred_id}/vms", tags=["vms"])
@@ -66,7 +67,9 @@ def rrd(cred_id: int, kind: str, node: str, vmid: int, timeframe: str = "hour",
 # ---------- Power (senior+) ----------
 
 def _action(fn, cred, node, vmid, kind):
-    return {"upid": fn(build_client(cred), node, vmid, _kind(kind))}
+    result = {"upid": fn(build_client(cred), node, vmid, _kind(kind))}
+    bump_revision(cred.id)
+    return result
 
 
 @router.post("/{kind}/{node}/{vmid}/start")
@@ -106,7 +109,9 @@ def delete(cred_id: int, kind: str, node: str, vmid: int, body: DeleteConfirmIn,
         raise HTTPException(400, f"Confirmation name does not match (expected '{real_name}')")
     if current_info.get("status") == "running":
         raise HTTPException(409, "Stop the guest before deleting")
-    return {"upid": vm_delete(px, node, vmid, _kind(kind))}
+    result = {"upid": vm_delete(px, node, vmid, _kind(kind))}
+    bump_revision(cred_id)
+    return result
 
 
 # ---------- Config update (senior+) ----------
@@ -133,6 +138,7 @@ def update_config(cred_id: int, kind: str, node: str, vmid: int, body: VMConfigU
     if not params:
         raise HTTPException(400, "No parameters to update")
     result = vm_update_config(build_client(cred), node, vmid, k, params)
+    bump_revision(cred_id)
     return {"upid": result, "updated": list(params.keys())}
 
 
@@ -142,10 +148,12 @@ def update_config(cred_id: int, kind: str, node: str, vmid: int, body: VMConfigU
 def clone(cred_id: int, kind: str, node: str, vmid: int, body: CloneIn,
           db: Session = Depends(get_db), user: User = Depends(require_senior)):
     cred = _get_cred(db, user, cred_id)
-    return {"upid": vm_clone(
+    result = {"upid": vm_clone(
         build_client(cred), node, vmid, newid=body.newid, kind=_kind(kind),
         target=body.target_node, name=body.name, full=body.full,
     )}
+    bump_revision(cred_id)
+    return result
 
 
 # ---------- Migration (senior+) ----------

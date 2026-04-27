@@ -8,6 +8,8 @@ by the routers (cluster resources, node stats, vm actions, migrations...).
 
 from __future__ import annotations
 
+import threading
+import time
 import urllib3
 from typing import Any, Optional
 
@@ -16,23 +18,43 @@ from proxmoxer import ProxmoxAPI
 from .crypto import decrypt_password
 from .models import ProxmoxCredential
 
+# Cache authenticated ProxmoxAPI clients to avoid re-doing the auth-ticket
+# handshake on every request (saves one HTTP round-trip each time).
+_client_cache: dict[int, tuple[ProxmoxAPI, float]] = {}
+_client_lock = threading.Lock()
+CLIENT_TTL = 270.0  # seconds (Proxmox tickets last 2 h; we refresh well before)
+
 
 def build_client(cred: ProxmoxCredential) -> ProxmoxAPI:
-    """Create a ProxmoxAPI client from a DB credential row."""
+    """Return a cached (or freshly-created) ProxmoxAPI client."""
+    now = time.monotonic()
+    with _client_lock:
+        entry = _client_cache.get(cred.id)
+        if entry and (now - entry[1]) < CLIENT_TTL:
+            return entry[0]
+
     if not cred.verify_ssl:
-        # Silence self-signed warnings on homelab / lab setups
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     password = decrypt_password(cred.encrypted_password)
     user = f"{cred.pve_username}@{cred.pve_realm}"
 
-    return ProxmoxAPI(
+    client = ProxmoxAPI(
         host=f"{cred.host}:{cred.port}",
         user=user,
         password=password,
         verify_ssl=cred.verify_ssl,
-        timeout=8,   # fail fast on unreachable servers
+        timeout=15,
     )
+    with _client_lock:
+        _client_cache[cred.id] = (client, now)
+    return client
+
+
+def invalidate_client(cred_id: int) -> None:
+    """Drop the cached client (call on credential update / deletion)."""
+    with _client_lock:
+        _client_cache.pop(cred_id, None)
 
 
 # ---------------- High level helpers ----------------
