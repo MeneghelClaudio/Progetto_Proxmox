@@ -171,7 +171,7 @@ let CLUSTER_RAW  = null;
 let ALL_CLUSTERS = null;   // [{cred_id, cred_name, host, online, tree:normalized, raw, error}, ...]
 let _allClustersTs   = 0;  // timestamp of last successful fetch
 let _allClustersPromise = null; // deduplicate concurrent fetches
-const ALL_CLUSTERS_TTL = 20000; // 20 s client-side cache (matches backend TTL)
+const ALL_CLUSTERS_TTL = 60000; // 60 s client-side cache (matches backend TREE_TTL)
 
 // ---------- Revision polling (detects mutations from any session) ----------
 
@@ -248,7 +248,14 @@ async function ensureClusterData() {
 }
 
 async function ensureAllClusters() {
-  if (_isCacheStale()) await refreshAllClusters();
+  if (!ALL_CLUSTERS) {
+    // Prima visita assoluta: attendi il fetch
+    await refreshAllClusters();
+  } else if (_isCacheStale()) {
+    // Cache scaduta: restituisci i dati esistenti subito (stale-while-revalidate)
+    // e aggiorna in background senza bloccare il chiamante
+    refreshAllClusters().catch(() => {});
+  }
   return ALL_CLUSTERS;
 }
 

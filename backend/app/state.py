@@ -1,10 +1,14 @@
 """
 Shared in-process state: tree cache + revision counter.
 
-Tree cache: caches _build_tree results per (user_id, cred_id) for TREE_TTL seconds.
-Revision:   monotonic counter incremented on every mutation (start/stop/delete/clone/…).
-            The frontend polls /api/revision every 10 s; when it changes, clients
-            invalidate their local cache and refresh.
+Tree cache: caches _build_tree results per (user_id, cred_id).
+  - TREE_TTL        = fresh window (returns from cache immediately)
+  - TREE_STALE_TTL  = stale-while-revalidate window (serves old data
+                      instantly while a background refresh runs)
+
+Revision: monotonic counter incremented on every mutation.
+          The frontend polls /api/revision every 10 s; when it changes,
+          clients invalidate their local cache and refresh.
 """
 
 from __future__ import annotations
@@ -16,16 +20,42 @@ import time
 
 _tree_cache: dict[tuple[int, int], tuple[dict, float]] = {}
 _tree_lock = threading.Lock()
-TREE_TTL = 20.0  # seconds
+
+TREE_TTL       = 60.0   # seconds — fresh window (up from 20 s)
+TREE_STALE_TTL = 300.0  # seconds — stale-while-revalidate window (5 min)
 
 
 def get_cached_tree(user_id: int, cred_id: int) -> dict | None:
+    """Return fresh cached data, or None if expired / missing."""
     key = (user_id, cred_id)
     with _tree_lock:
         entry = _tree_cache.get(key)
         if entry and (time.monotonic() - entry[1]) < TREE_TTL:
             return entry[0]
     return None
+
+
+def get_stale_tree(user_id: int, cred_id: int) -> tuple[dict | None, bool]:
+    """
+    Stale-while-revalidate helper.
+
+    Returns (data, is_stale):
+      - (data, False)  → fresh cache hit
+      - (data, True)   → stale but still usable; caller should schedule bg refresh
+      - (None, False)  → no cache or too old; caller must fetch synchronously
+    """
+    key = (user_id, cred_id)
+    with _tree_lock:
+        entry = _tree_cache.get(key)
+        if not entry:
+            return None, False
+        data, ts = entry
+        age = time.monotonic() - ts
+        if age < TREE_TTL:
+            return data, False          # fresh
+        if age < TREE_STALE_TTL:
+            return data, True           # stale but usable
+        return None, False              # too old — force re-fetch
 
 
 def set_cached_tree(user_id: int, cred_id: int, result: dict) -> None:

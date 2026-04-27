@@ -44,7 +44,7 @@ def build_client(cred: ProxmoxCredential) -> ProxmoxAPI:
         user=user,
         password=password,
         verify_ssl=cred.verify_ssl,
-        timeout=15,
+        timeout=8,
     )
     with _client_lock:
         _client_cache[cred.id] = (client, now)
