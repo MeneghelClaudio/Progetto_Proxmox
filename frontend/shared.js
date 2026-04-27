@@ -171,7 +171,33 @@ let CLUSTER_RAW  = null;
 let ALL_CLUSTERS = null;   // [{cred_id, cred_name, host, online, tree:normalized, raw, error}, ...]
 let _allClustersTs   = 0;  // timestamp of last successful fetch
 let _allClustersPromise = null; // deduplicate concurrent fetches
-const ALL_CLUSTERS_TTL = 30000; // 30 s cache
+const ALL_CLUSTERS_TTL = 20000; // 20 s client-side cache (matches backend TTL)
+
+// ---------- Revision polling (detects mutations from any session) ----------
+
+let _lastRevision = null;
+let _revisionTimer = null;
+
+function startRevisionPolling(onChanged) {
+  if (_revisionTimer) return;
+  _revisionTimer = setInterval(async () => {
+    try {
+      const data = await apiRequest('/api/clusters/revision');
+      if (_lastRevision !== null && data.rev > _lastRevision) {
+        _allClustersTs = 0;  // invalidate client-side cache
+        CLUSTER_DATA = null;
+        if (onChanged) onChanged();
+      }
+      _lastRevision = data.rev;
+    } catch { /* silent */ }
+  }, 10000);
+  // fetch initial revision
+  apiRequest('/api/clusters/revision').then(d => { _lastRevision = d.rev; }).catch(() => {});
+}
+
+function stopRevisionPolling() {
+  if (_revisionTimer) { clearInterval(_revisionTimer); _revisionTimer = null; }
+}
 
 async function refreshClusterData() {
   const credId = getActiveCred();

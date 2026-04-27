@@ -23,6 +23,7 @@ from ..proxmox_client import (
     build_client, cluster_resources, cluster_status,
     node_status, node_rrddata,
 )
+from ..state import get_cached_tree, set_cached_tree, get_revision
 
 
 router = APIRouter(prefix="/api/clusters", tags=["cluster"])
@@ -148,9 +149,16 @@ def get_all_trees(db: Session = Depends(get_db), user: User = Depends(get_curren
             "tree": None,
             "error": None,
         }
+        cached = get_cached_tree(user.id, c.id)
+        if cached is not None:
+            item["tree"] = cached
+            item["online"] = True
+            return item
         try:
             px = build_client(c)
-            item["tree"] = _build_tree(px)
+            tree = _build_tree(px)
+            set_cached_tree(user.id, c.id, tree)
+            item["tree"] = tree
             item["online"] = True
         except Exception as e:
             item["error"] = f"{type(e).__name__}: {e}"
@@ -163,16 +171,25 @@ def get_all_trees(db: Session = Depends(get_db), user: User = Depends(get_curren
     return out
 
 
+@router.get("/revision")
+def revision(user: User = Depends(get_current_user)):
+    """Returns the current global revision counter. Clients poll this to detect mutations."""
+    return {"rev": get_revision()}
+
+
 @router.get("/{cred_id}/tree")
 def get_tree(cred_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """Returns the full sidebar tree for a single credential."""
+    """Returns the full sidebar tree for a single credential (cached 20 s)."""
     cred = _get_cred(db, user, cred_id)
+    cached = get_cached_tree(user.id, cred_id)
+    if cached is not None:
+        return cached
     try:
         px = build_client(cred)
-        return _build_tree(px)
+        result = _build_tree(px)
+        set_cached_tree(user.id, cred_id, result)
+        return result
     except Exception as e:
-        # Return an empty tree with error info so the UI doesn't blow up
-        # when the server is down / unreachable.
         raise HTTPException(502, f"Proxmox API error: {type(e).__name__}: {e}")
 
 
