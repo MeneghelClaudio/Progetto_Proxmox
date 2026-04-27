@@ -31,7 +31,7 @@ def build_client(cred: ProxmoxCredential) -> ProxmoxAPI:
         user=user,
         password=password,
         verify_ssl=cred.verify_ssl,
-        timeout=15,
+        timeout=8,   # fail fast on unreachable servers
     )
 
 
@@ -72,6 +72,13 @@ def vm_current(px: ProxmoxAPI, node: str, vmid: int, kind: str = "qemu") -> dict
 def vm_config(px: ProxmoxAPI, node: str, vmid: int, kind: str = "qemu") -> dict:
     branch = px.nodes(node).qemu if kind == "qemu" else px.nodes(node).lxc
     return branch(vmid).config.get()
+
+
+def vm_update_config(px: ProxmoxAPI, node: str, vmid: int,
+                     kind: str, params: dict) -> Any:
+    """Apply live config changes. Returns UPID if restart required, else None."""
+    branch = px.nodes(node).qemu if kind == "qemu" else px.nodes(node).lxc
+    return branch(vmid).config.put(**params)
 
 
 # ---------- Power actions ----------

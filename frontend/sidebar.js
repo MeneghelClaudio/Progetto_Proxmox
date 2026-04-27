@@ -5,8 +5,10 @@ async function buildSidebar(activePage) {
   if (!session) return;
   renderTopbar(session);
   renderSidebarShell(activePage, session);
-  await ensureClusterData();          // populates CLUSTER_DATA (active) + ALL_CLUSTERS
-  renderSidebarTree(activePage, session);
+  // Load tree in background — page content renders immediately without waiting.
+  ensureClusterData()
+    .then(() => renderSidebarTree(activePage, session))
+    .catch(() => {});
 }
 
 function renderTopbar(session) {

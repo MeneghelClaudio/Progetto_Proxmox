@@ -227,3 +227,16 @@ class ClusterJoinIn(BaseModel):
 
 class ClusterDestroyIn(BaseModel):
     node_cred_ids: list[int] = []
+
+
+class VMConfigUpdateIn(BaseModel):
+    cores:       Optional[int]   = Field(default=None, ge=1, le=512)
+    sockets:     Optional[int]   = Field(default=None, ge=1, le=8)
+    memory:      Optional[int]   = Field(default=None, ge=16)
+    balloon:     Optional[int]   = Field(default=None, ge=0)
+    swap:        Optional[int]   = Field(default=None, ge=0)
+    cpulimit:    Optional[float] = Field(default=None, ge=0, le=128)
+    onboot:      Optional[bool]  = None
+    description: Optional[str]  = None
+    name:        Optional[str]   = None
+    hostname:    Optional[str]   = None

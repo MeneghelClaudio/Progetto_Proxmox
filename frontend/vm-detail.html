@@ -169,6 +169,86 @@ canvas.sparkline { width:100%; height:100%; }
       </div>
     </div>
 
+    <!-- Modal: modifica hardware VM/CT -->
+    <div class="modal-overlay hidden" id="modal-edit-hw">
+      <div class="modal" style="max-width:520px">
+        <div class="modal-title" id="edit-hw-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">tune</span>
+          Modifica configurazione hardware
+        </div>
+        <div class="modal-sub" id="edit-hw-sub"></div>
+
+        <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:10px">Identità</div>
+          <div class="form-group">
+            <label class="form-label" id="edit-hw-name-label">Nome</label>
+            <input type="text" class="form-input" id="edit-hw-name" placeholder="nome-vm"/>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:10px">CPU</div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Core</label>
+              <input type="number" class="form-input" id="edit-hw-cores" min="1" max="512"/>
+            </div>
+            <div class="form-group" id="edit-hw-sockets-group">
+              <label class="form-label">Socket</label>
+              <input type="number" class="form-input" id="edit-hw-sockets" min="1" max="8"/>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Limite CPU <span style="color:var(--text-dim);font-weight:400">(0 = illimitato)</span></label>
+            <input type="number" class="form-input" id="edit-hw-cpulimit" min="0" max="128" step="0.5"/>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:10px">Memoria</div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">RAM (MB)</label>
+              <input type="number" class="form-input" id="edit-hw-memory" min="16" step="128"/>
+            </div>
+            <div class="form-group" id="edit-hw-swap-group" style="display:none">
+              <label class="form-label">Swap (MB)</label>
+              <input type="number" class="form-input" id="edit-hw-swap" min="0" step="128"/>
+            </div>
+            <div class="form-group" id="edit-hw-balloon-group">
+              <label class="form-label">Balloon min (MB) <span style="color:var(--text-dim);font-weight:400">0=off</span></label>
+              <input type="number" class="form-input" id="edit-hw-balloon" min="0" step="128"/>
+            </div>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--border);padding-top:14px;margin-bottom:14px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--text-muted);margin-bottom:10px">Opzioni</div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+              <input type="checkbox" id="edit-hw-onboot"/> Avvio automatico con il server
+            </label>
+          </div>
+          <div class="form-group" style="margin-top:10px">
+            <label class="form-label">Descrizione</label>
+            <textarea class="form-input" id="edit-hw-desc" rows="2" style="resize:vertical;font-size:12px"></textarea>
+          </div>
+        </div>
+
+        <div id="edit-hw-info" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:11px;color:var(--text-dim);margin-bottom:12px;display:none">
+          <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px;color:var(--warning)">info</span>
+          Alcune modifiche (es. CPU) potrebbero richiedere un riavvio per essere attive.
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-edit-hw')">Annulla</button>
+          <button class="btn btn-primary" id="edit-hw-save-btn" onclick="saveEditConfig()">
+            <span class="material-symbols-rounded">save</span> Salva modifiche
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: snapshot -->
     <div class="modal-overlay hidden" id="modal-snapshot">
       <div class="modal">
@@ -563,6 +643,7 @@ async function renderDetail(vm) {
     ${can(session, 'stop')     && vm.status === 'running' ? `<button class="btn btn-danger btn-sm"  onclick="vmAction('stop')"><span class="material-symbols-rounded">stop</span> Stop</button>` : ''}
     ${can(session, 'shutdown') && vm.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('shutdown')"><span class="material-symbols-rounded">power_settings_new</span> Shutdown</button>` : ''}
     ${can(session, 'reboot')   && vm.status === 'running' ? `<button class="btn btn-secondary btn-sm" onclick="vmAction('reboot')"><span class="material-symbols-rounded">restart_alt</span> Reboot</button>` : ''}
+    ${can(session, 'clone')    ? `<button class="btn btn-secondary btn-sm" onclick="openEditHW()"><span class="material-symbols-rounded">tune</span> Modifica HW</button>` : ''}
     ${can(session, 'clone')    ? `<button class="btn btn-secondary btn-sm" onclick="openCloneModal()"><span class="material-symbols-rounded">content_copy</span> Clona</button>` : ''}
     ${can(session, 'delete')   ? `<button class="btn btn-danger btn-sm"    onclick="openDelete()"><span class="material-symbols-rounded">delete</span> Elimina</button>` : ''}
   `;
@@ -745,6 +826,95 @@ async function executeDelete() {
   } catch (e) {
     finishTaskToast(toastId, false, `Errore eliminazione ${vm.name}`, e.detail || e.message);
     showErrorModal(`Errore eliminazione ${vm.name}`, e.message, e.detail);
+  }
+}
+
+// ── Hardware edit ──────────────────────────────────────────────────────────
+
+async function openEditHW() {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+
+  const isLxc = vm.kind === 'lxc';
+  document.getElementById('edit-hw-title').innerHTML =
+    `<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">tune</span>
+     Modifica HW — ${escapeHtml(vm.name)}`;
+  document.getElementById('edit-hw-sub').textContent =
+    `${vm.type.toUpperCase()} · ID ${vm.id} · Nodo ${vm.node}`;
+  document.getElementById('edit-hw-name-label').textContent = isLxc ? 'Hostname' : 'Nome';
+  document.getElementById('edit-hw-sockets-group').style.display = isLxc ? 'none' : '';
+  document.getElementById('edit-hw-swap-group').style.display    = isLxc ? '' : 'none';
+  document.getElementById('edit-hw-balloon-group').style.display = isLxc ? 'none' : '';
+  document.getElementById('edit-hw-save-btn').disabled = true;
+  document.getElementById('edit-hw-info').style.display = 'none';
+
+  // Reset fields
+  ['edit-hw-name','edit-hw-cores','edit-hw-sockets','edit-hw-cpulimit',
+   'edit-hw-memory','edit-hw-swap','edit-hw-balloon','edit-hw-desc'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('edit-hw-onboot').checked = false;
+
+  openModal('modal-edit-hw');
+
+  try {
+    const data = await vmsApi.current(getActiveCred(), vm.kind, vm.node, vm.id);
+    const cfg  = data.config || {};
+    document.getElementById('edit-hw-name').value    = cfg.name || cfg.hostname || vm.name;
+    document.getElementById('edit-hw-cores').value   = cfg.cores   ?? 1;
+    document.getElementById('edit-hw-sockets').value = cfg.sockets ?? 1;
+    document.getElementById('edit-hw-cpulimit').value= cfg.cpulimit ?? 0;
+    document.getElementById('edit-hw-memory').value  = cfg.memory  ?? 512;
+    document.getElementById('edit-hw-swap').value    = cfg.swap    ?? 0;
+    document.getElementById('edit-hw-balloon').value = cfg.balloon ?? 0;
+    document.getElementById('edit-hw-onboot').checked= !!cfg.onboot;
+    document.getElementById('edit-hw-desc').value    = cfg.description || '';
+    document.getElementById('edit-hw-info').style.display = '';
+    document.getElementById('edit-hw-save-btn').disabled  = false;
+  } catch (e) {
+    showToast('Errore caricamento config: ' + e.message, 'danger');
+    closeModal('modal-edit-hw');
+  }
+}
+
+async function saveEditConfig() {
+  const vm = allVMs.find(v => v.id === activeVMId);
+  if (!vm) return;
+  const isLxc = vm.kind === 'lxc';
+
+  const payload = {};
+  const nameVal    = document.getElementById('edit-hw-name').value.trim();
+  const cores      = parseInt(document.getElementById('edit-hw-cores').value);
+  const sockets    = parseInt(document.getElementById('edit-hw-sockets').value);
+  const cpulimit   = parseFloat(document.getElementById('edit-hw-cpulimit').value);
+  const memory     = parseInt(document.getElementById('edit-hw-memory').value);
+  const swap       = parseInt(document.getElementById('edit-hw-swap').value);
+  const balloon    = parseInt(document.getElementById('edit-hw-balloon').value);
+  const onboot     = document.getElementById('edit-hw-onboot').checked;
+  const desc       = document.getElementById('edit-hw-desc').value;
+
+  if (nameVal)             payload[isLxc ? 'hostname' : 'name'] = nameVal;
+  if (cores   > 0)         payload.cores    = cores;
+  if (!isLxc && sockets > 0) payload.sockets = sockets;
+  if (!isNaN(cpulimit))    payload.cpulimit = cpulimit;
+  if (memory  >= 16)       payload.memory   = memory;
+  if (isLxc && swap >= 0)  payload.swap     = swap;
+  if (!isLxc && balloon >= 0) payload.balloon = balloon;
+  payload.onboot      = onboot;
+  payload.description = desc;
+
+  const toastId = showTaskToast(`Salvataggio configurazione ${vm.name}…`);
+  closeModal('modal-edit-hw');
+  try {
+    await vmsApi.updateConfig(getActiveCred(), vm.kind, vm.node, vm.id, payload);
+    finishTaskToast(toastId, true, `Configurazione ${vm.name} aggiornata`);
+    // Refresh VM detail to reflect changes
+    await refreshClusterData();
+    DATA = CLUSTER_DATA; allVMs = DATA.vms;
+    const fresh = allVMs.find(v => v.id === activeVMId);
+    if (fresh) { renderVMList(); await renderDetail(fresh); }
+  } catch (e) {
+    finishTaskToast(toastId, false, `Errore salvataggio ${vm.name}`, e.detail || e.message);
   }
 }
 
