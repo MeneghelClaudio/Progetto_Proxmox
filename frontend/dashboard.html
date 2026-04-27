@@ -119,9 +119,10 @@
 const session = requireAuth();
 let DATA = null;   // aggregated across all servers
 let ALL_SRV = [];  // raw allClusters response
+let _refreshTimer = null;
 
 async function init() {
-  await buildSidebar('dashboard');
+  buildSidebar('dashboard');  // non-blocking — shell renders instantly
 
   const creds = await credsApi.list().catch(() => []);
   if (!creds.length) {
@@ -139,7 +140,6 @@ async function init() {
     return;
   }
 
-  // Keep active cred set (needed by other pages), but don't restrict dashboard view.
   await ensureActiveCred();
 
   ALL_SRV = await ensureAllClusters();
@@ -161,6 +161,18 @@ async function init() {
 
   renderOverview();
   switchTab('nodes');
+
+  // Auto-refresh every 30 s
+  if (_refreshTimer) clearInterval(_refreshTimer);
+  _refreshTimer = setInterval(async () => {
+    try {
+      ALL_SRV = await refreshAllClusters();
+      DATA = aggregateAll(ALL_SRV);
+      renderOverview();
+      const activeTab = document.querySelector('.tab.active')?.dataset?.tab || 'nodes';
+      switchTab(activeTab);
+    } catch { /* silent */ }
+  }, 30000);
 }
 
 // Merge all per-server trees into one DATA object.

@@ -15,10 +15,11 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..auth import get_current_user, require_senior, require_admin
 from ..models import User, ProxmoxCredential
-from ..schemas import CloneIn, MigrateIn, DeleteConfirmIn, MigrationTaskOut
+from ..schemas import CloneIn, MigrateIn, DeleteConfirmIn, MigrationTaskOut, VMConfigUpdateIn
 from ..proxmox_client import (
     build_client, vm_current, vm_config, vm_rrddata,
     vm_start, vm_stop, vm_shutdown, vm_reboot, vm_delete, vm_clone,
+    vm_update_config,
 )
 from ..tasks import start_migration, poll_migration
 
@@ -106,6 +107,33 @@ def delete(cred_id: int, kind: str, node: str, vmid: int, body: DeleteConfirmIn,
     if current_info.get("status") == "running":
         raise HTTPException(409, "Stop the guest before deleting")
     return {"upid": vm_delete(px, node, vmid, _kind(kind))}
+
+
+# ---------- Config update (senior+) ----------
+
+@router.put("/{kind}/{node}/{vmid}/config")
+def update_config(cred_id: int, kind: str, node: str, vmid: int, body: VMConfigUpdateIn,
+                  db: Session = Depends(get_db), user: User = Depends(require_senior)):
+    """Live-update CPU, memory, boot flag, and description of a VM/CT."""
+    cred = _get_cred(db, user, cred_id)
+    k = _kind(kind)
+    params: dict = {}
+    if body.cores       is not None: params["cores"]       = body.cores
+    if body.memory      is not None: params["memory"]      = body.memory
+    if body.onboot      is not None: params["onboot"]      = 1 if body.onboot else 0
+    if body.description is not None: params["description"] = body.description
+    if body.cpulimit    is not None: params["cpulimit"]    = body.cpulimit
+    if body.balloon     is not None: params["balloon"]     = body.balloon
+    if k == "qemu":
+        if body.sockets  is not None: params["sockets"]  = body.sockets
+        if body.name     is not None: params["name"]     = body.name
+    else:
+        if body.swap     is not None: params["swap"]     = body.swap
+        if body.hostname is not None: params["hostname"] = body.hostname
+    if not params:
+        raise HTTPException(400, "No parameters to update")
+    result = vm_update_config(build_client(cred), node, vmid, k, params)
+    return {"upid": result, "updated": list(params.keys())}
 
 
 # ---------- Clone (senior+) ----------

@@ -178,7 +178,8 @@ const vmsApi = {
     return apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/clone`, { method: 'POST', body: payload });
   },
   remove:   (credId, kind, node, vmid, confirmName)=>apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/delete`,   { method: 'POST', body: { confirm_name: confirmName } }),
-  migrate:  (credId, kind, node, vmid, payload)   => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/migrate`,  { method: 'POST', body: payload }),
+  migrate:      (credId, kind, node, vmid, payload) => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/migrate`,      { method: 'POST', body: payload }),
+  updateConfig: (credId, kind, node, vmid, payload) => apiRequest(`/api/clusters/${credId}/vms/${kind}/${node}/${vmid}/config`,        { method: 'PUT',  body: payload }),
 };
 
 // ---------- Snapshots / backups API ----------

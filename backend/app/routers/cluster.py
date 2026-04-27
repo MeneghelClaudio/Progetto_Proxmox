@@ -8,6 +8,8 @@ and a thin set of endpoints used by the cluster management page
  GET /api/clusters/all).
 """
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Any
@@ -37,9 +39,14 @@ def _get_cred(db: Session, user: User, cred_id: int) -> ProxmoxCredential:
 
 
 def _build_tree(px) -> dict:
-    """Pure function: build the tree payload from a connected proxmox client."""
-    resources = cluster_resources(px)
-    status = cluster_status(px)
+    """Build the tree payload from a connected proxmox client. Parallelises I/O."""
+
+    # Fetch resources + status concurrently
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_res = ex.submit(cluster_resources, px)
+        f_st  = ex.submit(cluster_status, px)
+        resources = f_res.result()
+        status    = f_st.result()
 
     cluster_info = next((s for s in status if s.get("type") == "cluster"), None)
     node_entries = [s for s in status if s.get("type") == "node"]
@@ -89,22 +96,26 @@ def _build_tree(px) -> dict:
             if r.get("content") and "backup" in (r.get("content") or ""):
                 backup_targets.append(storage_obj)
 
-    for n in node_entries:
-        name = n["name"]
-        if name in by_node and n.get("online"):
-            try:
-                ns = node_status(px, name)
-                by_node[name].update({
-                    "cpu": ns.get("cpu"),
-                    "maxcpu": ns.get("cpuinfo", {}).get("cpus"),
-                    "mem": ns.get("memory", {}).get("used"),
-                    "maxmem": ns.get("memory", {}).get("total"),
-                    "uptime": ns.get("uptime"),
-                    "loadavg": ns.get("loadavg", []),
-                    "pve_version": ns.get("pveversion"),
-                })
-            except Exception:
-                pass
+    # Fetch per-node stats in parallel (one request per online node)
+    online_names = [n["name"] for n in node_entries if n.get("online") and n["name"] in by_node]
+    if online_names:
+        with ThreadPoolExecutor(max_workers=min(len(online_names), 8)) as ex:
+            future_map = {ex.submit(node_status, px, name): name for name in online_names}
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    ns = future.result()
+                    by_node[name].update({
+                        "cpu": ns.get("cpu"),
+                        "maxcpu": ns.get("cpuinfo", {}).get("cpus"),
+                        "mem": ns.get("memory", {}).get("used"),
+                        "maxmem": ns.get("memory", {}).get("total"),
+                        "uptime": ns.get("uptime"),
+                        "loadavg": ns.get("loadavg", []),
+                        "pve_version": ns.get("pveversion"),
+                    })
+                except Exception:
+                    pass
 
     return {
         "cluster": cluster_info,
@@ -121,10 +132,13 @@ def get_all_trees(db: Session = Depends(get_db), user: User = Depends(get_curren
     Even servers that are unreachable / powered off are included as a
     placeholder so the sidebar can still show them with an "offline" badge.
     Each entry: { cred_id, cred_name, host, online, tree, error }.
+    All credentials are queried in parallel to minimise latency.
     """
     creds = db.query(ProxmoxCredential).filter(ProxmoxCredential.user_id == user.id).all()
-    out: list[dict] = []
-    for c in creds:
+    if not creds:
+        return []
+
+    def _fetch_one(c) -> dict[str, Any]:
         item: dict[str, Any] = {
             "cred_id": c.id,
             "cred_name": c.name,
@@ -140,7 +154,12 @@ def get_all_trees(db: Session = Depends(get_db), user: User = Depends(get_curren
             item["online"] = True
         except Exception as e:
             item["error"] = f"{type(e).__name__}: {e}"
-        out.append(item)
+        return item
+
+    workers = min(len(creds), 8)
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        # preserve original registration order
+        out = list(ex.map(_fetch_one, creds))
     return out
 
 

@@ -169,6 +169,9 @@ function initSidebarToggle(shellEl) {
 let CLUSTER_DATA = null;   // normalized tree of the *active* credential
 let CLUSTER_RAW  = null;
 let ALL_CLUSTERS = null;   // [{cred_id, cred_name, host, online, tree:normalized, raw, error}, ...]
+let _allClustersTs   = 0;  // timestamp of last successful fetch
+let _allClustersPromise = null; // deduplicate concurrent fetches
+const ALL_CLUSTERS_TTL = 30000; // 30 s cache
 
 async function refreshClusterData() {
   const credId = getActiveCred();
@@ -186,34 +189,45 @@ async function refreshClusterData() {
 }
 
 async function refreshAllClusters() {
-  try {
-    const items = await clusterApi.allTrees();
-    ALL_CLUSTERS = items.map(it => ({
-      cred_id:   it.cred_id,
-      cred_name: it.cred_name,
-      host:      it.host,
-      port:      it.port,
-      online:    !!it.online,
-      raw:       it.tree || null,
-      tree:      it.tree ? normalizeTree(it.tree) : { nodes: [], vms: [], clusters: [], backupServers: [] },
-      error:     it.error || null,
-    }));
-    return ALL_CLUSTERS;
-  } catch (e) {
-    ALL_CLUSTERS = [];
-    return ALL_CLUSTERS;
-  }
+  // Deduplicate: if a fetch is already in flight, return the same promise
+  if (_allClustersPromise) return _allClustersPromise;
+  _allClustersPromise = clusterApi.allTrees()
+    .then(items => {
+      ALL_CLUSTERS = items.map(it => ({
+        cred_id:   it.cred_id,
+        cred_name: it.cred_name,
+        host:      it.host,
+        port:      it.port,
+        online:    !!it.online,
+        raw:       it.tree || null,
+        tree:      it.tree ? normalizeTree(it.tree) : { nodes: [], vms: [], clusters: [], backupServers: [] },
+        error:     it.error || null,
+      }));
+      _allClustersTs = Date.now();
+      return ALL_CLUSTERS;
+    })
+    .catch(() => { ALL_CLUSTERS = []; return ALL_CLUSTERS; })
+    .finally(() => { _allClustersPromise = null; });
+  return _allClustersPromise;
 }
 
 async function ensureClusterData() {
-  if (!CLUSTER_DATA) await refreshClusterData();
+  // Run both fetches in parallel; the sidebar only waits on this before rendering
+  await Promise.all([
+    CLUSTER_DATA  ? Promise.resolve() : refreshClusterData(),
+    _isCacheStale() ? refreshAllClusters() : Promise.resolve(),
+  ]);
   if (!ALL_CLUSTERS) await refreshAllClusters();
   return CLUSTER_DATA;
 }
 
 async function ensureAllClusters() {
-  if (!ALL_CLUSTERS) await refreshAllClusters();
+  if (_isCacheStale()) await refreshAllClusters();
   return ALL_CLUSTERS;
+}
+
+function _isCacheStale() {
+  return !ALL_CLUSTERS || (Date.now() - _allClustersTs > ALL_CLUSTERS_TTL);
 }
 
 // ---------- Error modal (Proxmox-style detailed error) ----------
