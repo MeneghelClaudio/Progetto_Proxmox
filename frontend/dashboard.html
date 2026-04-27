@@ -117,14 +117,14 @@
 <script src="sidebar.js"></script>
 <script>
 const session = requireAuth();
-let DATA = null;
+let DATA = null;   // aggregated across all servers
+let ALL_SRV = [];  // raw allClusters response
 
 async function init() {
   await buildSidebar('dashboard');
 
-  // If no servers registered, show empty state and stop.
-  const credId = await ensureActiveCred();
-  if (!credId) {
+  const creds = await credsApi.list().catch(() => []);
+  if (!creds.length) {
     document.getElementById('overview-grid').innerHTML = '';
     document.getElementById('dash-tabs').style.display = 'none';
     document.getElementById('tab-content').innerHTML = `
@@ -139,27 +139,15 @@ async function init() {
     return;
   }
 
-  DATA = await ensureClusterData();
+  // Keep active cred set (needed by other pages), but don't restrict dashboard view.
+  await ensureActiveCred();
+
+  ALL_SRV = await ensureAllClusters();
+  DATA = aggregateAll(ALL_SRV);
 
   if (can(session, 'add_server')) {
-    // Active-server pill + clearly labelled actions
-    let activeSrvLabel = '';
-    try {
-      const creds = await credsApi.list();
-      const activeId = getActiveCred();
-      const activeSrv = creds.find(c => c.id === activeId);
-      if (activeSrv) {
-        activeSrvLabel = `<span class="active-srv-pill" title="Server attivo">
-          <span class="status-dot running"></span>
-          <span class="mono">${escapeHtml(activeSrv.name)}</span>
-          <span class="sep">·</span>
-          <span class="mono dim">${escapeHtml(activeSrv.host)}:${activeSrv.port}</span>
-        </span>`;
-      }
-    } catch {}
     document.getElementById('page-actions').innerHTML = `
       <div class="page-actions-row">
-        ${activeSrvLabel}
         <a href="servers.html" class="btn btn-secondary">
           <span class="material-symbols-rounded">dns</span>
           <span>Gestisci Server</span>
@@ -175,19 +163,52 @@ async function init() {
   switchTab('nodes');
 }
 
+// Merge all per-server trees into one DATA object.
+// Nodes/VMs carry server_id to avoid ID collisions across servers.
+function aggregateAll(allSrv) {
+  const nodes = [], vms = [], clusters = [], backupServers = [];
+
+  allSrv.forEach(srv => {
+    if (!srv.tree) return;
+    const t = srv.tree;
+
+    t.nodes.forEach(n => nodes.push({ ...n, server_id: srv.cred_id, server_name: srv.cred_name }));
+    t.vms.forEach(v => vms.push({ ...v, server_id: srv.cred_id }));
+
+    if (t.clusters.length) {
+      t.clusters.forEach(c => clusters.push({ ...c, server_id: srv.cred_id, server_name: srv.cred_name }));
+    } else if (t.nodes.length) {
+      // Standalone server — show as a pseudo-cluster entry in the Cluster tab
+      clusters.push({
+        id: 'standalone-' + srv.cred_id,
+        name: srv.cred_name,
+        nodes: t.nodes.map(n => n.id),
+        status: 'ok',
+        server_id: srv.cred_id,
+        server_name: srv.cred_name,
+        standalone: true,
+      });
+    }
+
+    t.backupServers.forEach(b => backupServers.push({ ...b, server_name: srv.cred_name }));
+  });
+
+  return { nodes, vms, clusters, backupServers };
+}
+
 function renderOverview() {
   const d = DATA;
-  const totalVMs = d.vms.filter(v => v.type === 'vm').length;
-  const totalCTs = d.vms.filter(v => v.type === 'ct').length;
-  const running  = d.vms.filter(v => v.status === 'running').length;
-  const nodesUp  = d.nodes.filter(n => n.status === 'running').length;
+  const onlineSrv = ALL_SRV.filter(s => s.online).length;
+  const nodesUp   = d.nodes.filter(n => n.status === 'running').length;
+  const totalVMs  = d.vms.filter(v => v.type === 'vm').length;
+  const totalCTs  = d.vms.filter(v => v.type === 'ct').length;
 
   const cards = [
-    { icon:'storage',        color:'var(--info)',    bg:'var(--info-dim)',    val: d.nodes.length,   lbl:'Nodi Fisici',    sub: `${nodesUp} online` },
-    { icon:'computer',       color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,         lbl:'Macchine Virtuali', sub: `${d.vms.filter(v=>v.type==='vm'&&v.status==='running').length} running` },
-    { icon:'deployed_code',  color:'#5dd05d',        bg:'#0c2e0c',            val: totalCTs,         lbl:'Container',      sub: `${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
-    { icon:'hub',            color:'var(--warning)', bg:'var(--warning-dim)', val: d.clusters.length, lbl:'Cluster',        sub: d.clusters.length ? `${d.clusters.filter(c=>c.status==='ok').length} healthy` : '—' },
-    { icon:'backup',         color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Target', sub: d.backupServers.length ? 'configurati' : 'nessuno' },
+    { icon:'dns',           color:'var(--accent)',  bg:'var(--accent-dim)',  val: ALL_SRV.length,   lbl:'Server Proxmox',    sub:`${onlineSrv} online` },
+    { icon:'storage',       color:'var(--info)',    bg:'var(--info-dim)',    val: d.nodes.length,   lbl:'Nodi Fisici',       sub:`${nodesUp} online` },
+    { icon:'computer',      color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,         lbl:'Macchine Virtuali', sub:`${d.vms.filter(v=>v.type==='vm'&&v.status==='running').length} running` },
+    { icon:'deployed_code', color:'#5dd05d',        bg:'#0c2e0c',            val: totalCTs,         lbl:'Container',         sub:`${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
+    { icon:'backup',        color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Target', sub: d.backupServers.length ? 'configurati' : 'nessuno' },
   ];
   document.getElementById('overview-grid').innerHTML = cards.map(c => `
     <div class="stat-card-lg">
@@ -218,20 +239,25 @@ function renderNodes() {
   if (!DATA.nodes.length) {
     return `<div class="empty-state"><span class="material-symbols-rounded">storage</span><h3>Nessun nodo disponibile</h3></div>`;
   }
+  const multiServer = ALL_SRV.length > 1;
   return `<div class="node-grid">${DATA.nodes.map(node => {
-    const vms = DATA.vms.filter(v => v.node === node.id);
+    const vms = DATA.vms.filter(v => v.node === node.id && v.server_id === node.server_id);
     const vmList = vms.slice(0, 6).map(v => `
       <a href="vm-detail.html?id=${v.id}" class="chip ${v.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="text-decoration:none">
         <span class="material-symbols-rounded" style="font-size:12px">${v.type === 'vm' ? 'computer' : 'deployed_code'}</span>
         ${escapeHtml(v.name)}
       </a>`).join('');
+    const serverBadge = multiServer
+      ? `<span class="chip" style="font-size:10px;background:var(--surface3);color:var(--text-muted)">${escapeHtml(node.server_name)}</span>`
+      : '';
     return `<div class="node-card">
       <div class="node-card-header">
         <span class="material-symbols-rounded" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
-        <div>
+        <div style="flex:1;min-width:0">
           <h3><a href="node-detail.html?id=${node.id}" style="color:var(--text);text-decoration:none">${escapeHtml(node.name)}</a></h3>
           <div class="text-xs text-muted">Uptime: ${node.uptime}</div>
         </div>
+        ${serverBadge}
         <span class="node-status">
           <span class="chip ${node.status === 'running' ? 'chip-running' : 'chip-stopped'}">${node.status}</span>
         </span>
@@ -250,23 +276,28 @@ function renderNodes() {
 
 function renderClusters() {
   if (!DATA.clusters.length) {
-    return `<div class="empty-state"><span class="material-symbols-rounded">hub</span><h3>Nessun cluster</h3><p>I nodi registrati sono standalone.</p></div>`;
+    return `<div class="empty-state"><span class="material-symbols-rounded">hub</span><h3>Nessun cluster o server disponibile</h3></div>`;
   }
   return `<div class="node-grid">${DATA.clusters.map(cl => {
-    const nodes = DATA.nodes.filter(n => cl.nodes.includes(n.id));
-    const pills = nodes.map(n => `
+    const clNodes = DATA.nodes.filter(n => cl.nodes.includes(n.id) && n.server_id === cl.server_id);
+    const pills = clNodes.map(n => `
       <a href="node-detail.html?id=${n.id}" class="cluster-node-pill">
         <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
         ${escapeHtml(n.name)}
-        <span class="text-xs text-muted">${DATA.vms.filter(v => v.node === n.id).length} VM/CT</span>
+        <span class="text-xs text-muted">${DATA.vms.filter(v => v.node === n.id && v.server_id === cl.server_id).length} VM/CT</span>
       </a>`).join('');
+    const icon = cl.standalone ? 'dns' : 'hub';
+    const iconColor = cl.standalone ? 'var(--accent)' : 'var(--info)';
+    const typeLabel = cl.standalone
+      ? `<span class="chip" style="font-size:10px;background:var(--surface3);color:var(--text-muted)">standalone</span>`
+      : `<span class="chip ${cl.status === 'ok' ? 'chip-running' : 'chip-paused'}" style="margin-left:auto">${cl.status}</span>`;
     return `<div class="cluster-card">
       <div class="cluster-header">
-        <span class="material-symbols-rounded" style="color:var(--info)">hub</span>
+        <span class="material-symbols-rounded" style="color:${iconColor}">${icon}</span>
         <h3>${escapeHtml(cl.name)}</h3>
-        <span class="chip ${cl.status === 'ok' ? 'chip-running' : 'chip-paused'}" style="margin-left:auto">${cl.status}</span>
+        <div style="margin-left:auto;display:flex;gap:6px;align-items:center">${typeLabel}</div>
       </div>
-      <div class="cluster-nodes">${pills}</div>
+      <div class="cluster-nodes">${pills || '<span style="font-size:12px;color:var(--text-dim)">Nessun nodo online</span>'}</div>
     </div>`;
   }).join('')}</div>`;
 }
@@ -275,6 +306,7 @@ function renderBackup() {
   if (!DATA.backupServers.length) {
     return `<div class="empty-state"><span class="material-symbols-rounded">backup</span><h3>Nessun backup target</h3><p>Non sono configurati storage di backup.</p></div>`;
   }
+  const multiServer = ALL_SRV.length > 1;
   return `<div class="node-grid">${DATA.backupServers.map(bs => {
     const pct = bs.diskTotal ? Math.round(bs.diskUsed / bs.diskTotal * 100) : 0;
     const total = Math.round(bs.diskTotal / 1024);
@@ -285,10 +317,14 @@ function renderBackup() {
       <div class="disk-unit ${i < usedDisks ? 'used' : 'free'}">
         <span class="material-symbols-rounded" style="font-size:14px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">storage</span>
       </div>`).join('');
+    const serverBadge = multiServer
+      ? `<span class="chip" style="font-size:10px;background:var(--surface3);color:var(--text-muted)">${escapeHtml(bs.server_name)}</span>`
+      : '';
     return `<div class="pbs-card">
       <div class="pbs-header">
         <span class="material-symbols-rounded" style="color:var(--warning)">backup</span>
         <h3>${escapeHtml(bs.name)}</h3>
+        ${serverBadge}
         <span class="chip chip-running" style="margin-left:auto">${bs.status}</span>
       </div>
       <div class="disk-rack">${disks}</div>
