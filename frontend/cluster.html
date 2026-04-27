@@ -147,6 +147,41 @@
       </div>
     </div>
 
+    <!-- Modal: doppia conferma eliminazione cluster -->
+    <div class="modal-overlay hidden" id="modal-destroy-cluster">
+      <div class="modal" style="max-width:520px">
+        <div class="modal-title" style="color:var(--danger)">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">warning</span>
+          Elimina Cluster — Operazione Irreversibile
+        </div>
+        <div style="background:color-mix(in srgb,var(--danger) 10%,transparent);border:1px solid var(--danger);border-radius:var(--radius);padding:14px;margin-bottom:16px;font-size:12.5px">
+          <b>Verranno eseguiti i seguenti comandi via SSH su ogni nodo del cluster:</b>
+          <pre style="font-family:var(--mono);font-size:11px;margin-top:8px;color:var(--text-muted);white-space:pre-wrap;margin-bottom:0">systemctl stop pve-cluster
+systemctl stop corosync
+pmxcfs -l &amp;
+rm /etc/pve/corosync.conf
+rm -rf /etc/corosync/*
+rm /etc/pve/cluster.conf
+killall pmxcfs
+systemctl start pve-cluster</pre>
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            Conferma: scrivi il nome del cluster <b id="destroy-name-hint" style="color:var(--danger)"></b>
+          </label>
+          <input type="text" class="form-input" id="destroy-confirm-input"
+            placeholder="Nome del cluster…"
+            oninput="checkDestroyConfirm()"/>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-destroy-cluster')">Annulla</button>
+          <button class="btn btn-danger" id="destroy-exec-btn" disabled onclick="executeDestroyCluster()">
+            <span class="material-symbols-rounded">delete_forever</span> Elimina definitivamente
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: configura join -->
     <div class="modal-overlay hidden" id="modal-join-info">
       <div class="modal" style="max-width:500px">
@@ -197,6 +232,7 @@ let SERVERS = [];           // credenziali registrate
 let CLUSTERS = [];          // { id, name, primary_id, node_ids: [] }  — local state
 let draggedServerId = null;
 let pendingJoin = null;     // { clusterId, serverId }
+let destroyClusterId = null;
 
 async function init() {
   await buildSidebar('cluster');
@@ -308,8 +344,8 @@ function renderClusters() {
         <button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cluster.id})">
           <span class="material-symbols-rounded">terminal</span> Comando join
         </button>
-        <button class="btn btn-sm btn-danger" onclick="deleteCluster(${cluster.id})" style="margin-left:auto">
-          <span class="material-symbols-rounded">delete</span> Elimina
+        <button class="btn btn-sm btn-danger" onclick="openDestroyCluster(${cluster.id})" style="margin-left:auto">
+          <span class="material-symbols-rounded">delete_forever</span> Elimina Cluster
         </button>
       </div>
     </div>`;
@@ -425,13 +461,53 @@ function removeFromCluster(clusterId, serverId) {
   showToast('Server rimosso dal cluster', 'warning');
 }
 
-function deleteCluster(clusterId) {
+function openDestroyCluster(clusterId) {
   const cluster = CLUSTERS.find(c => c.id === clusterId);
-  if (!confirm(`Eliminare il cluster "${cluster?.name}"? I server non vengono modificati.`)) return;
-  CLUSTERS = CLUSTERS.filter(c => c.id !== clusterId);
-  saveClusters();
-  renderAll();
-  showToast(`Cluster "${cluster?.name}" eliminato`, 'warning');
+  if (!cluster) return;
+  destroyClusterId = clusterId;
+  document.getElementById('destroy-name-hint').textContent = cluster.name;
+  document.getElementById('destroy-confirm-input').value = '';
+  document.getElementById('destroy-exec-btn').disabled = true;
+  openModal('modal-destroy-cluster');
+}
+
+function checkDestroyConfirm() {
+  const cluster = CLUSTERS.find(c => c.id === destroyClusterId);
+  const val = document.getElementById('destroy-confirm-input').value.trim();
+  document.getElementById('destroy-exec-btn').disabled = !cluster || val !== cluster.name;
+}
+
+async function executeDestroyCluster() {
+  const cluster = CLUSTERS.find(c => c.id === destroyClusterId);
+  if (!cluster) return;
+  const val = document.getElementById('destroy-confirm-input').value.trim();
+  if (val !== cluster.name) { showToast(`Scrivi esattamente "${cluster.name}"`, 'warning'); return; }
+
+  closeModal('modal-destroy-cluster');
+  const toastId = showTaskToast(`Eliminazione cluster "${cluster.name}" in corso su tutti i nodi…`);
+
+  try {
+    const result = await clusterApi.destroy(cluster.primary_id, {
+      node_cred_ids: cluster.node_ids || [],
+    });
+
+    CLUSTERS = CLUSTERS.filter(c => c.id !== destroyClusterId);
+    saveClusters();
+    renderAll();
+
+    const failed = (result.nodes || []).filter(n => !n.success);
+    if (failed.length) {
+      finishTaskToast(toastId, false,
+        `Cluster eliminato con errori su ${failed.length} nodo/i`,
+        failed.map(n => `${n.name} (${n.host}): ${n.error}`).join('\n'));
+    } else {
+      finishTaskToast(toastId, true,
+        `Cluster "${cluster.name}" dissolto su ${(result.nodes || []).length} nodi`);
+    }
+  } catch (e) {
+    finishTaskToast(toastId, false, 'Errore eliminazione cluster', e.detail || e.message);
+  }
+  destroyClusterId = null;
 }
 
 function openNewCluster() {

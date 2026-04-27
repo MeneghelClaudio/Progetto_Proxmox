@@ -223,3 +223,7 @@ class ClusterJoinIn(BaseModel):
     link0_address: str
     master_host: str
     master_password: str
+
+
+class ClusterDestroyIn(BaseModel):
+    node_cred_ids: list[int] = []

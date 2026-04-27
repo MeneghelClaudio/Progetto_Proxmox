@@ -218,13 +218,7 @@ function renderServers() {
     return;
   }
 
-  const activeId = getActiveCred();
   const cards = SERVERS.map(s => {
-    const isActive = s.id === activeId;
-    // Fix 2: bottone "Usa" e "Modifica" con icona+testo correttamente inline-flex
-    const usaBtn = !isActive ? `<button class="btn btn-sm btn-primary" onclick="setActive(${s.id})">
-      <span class="material-symbols-rounded">check_circle</span><span>Usa</span>
-    </button>` : '';
     const editBtn = session.level === 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="openEditServer(${s.id})">
       <span class="material-symbols-rounded">edit</span><span>Modifica</span>
     </button>` : '';
@@ -232,18 +226,15 @@ function renderServers() {
       <span class="material-symbols-rounded">delete</span>
     </button>` : '';
 
-    return `<div class="server-card ${isActive ? 'active' : ''}">
+    return `<div class="server-card">
       <div class="server-icon"><span class="material-symbols-rounded">dns</span></div>
       <div class="server-info">
-        <div class="server-name">
-          ${escapeHtml(s.name)}
-          ${isActive ? '<span class="chip chip-running">attivo</span>' : ''}
-        </div>
+        <div class="server-name">${escapeHtml(s.name)}</div>
         <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)} · ${escapeHtml(s.host)}:${s.port}</div>
         <div class="server-meta">SSL: ${s.verify_ssl ? 'verifica abilitata' : 'self-signed'} · Creato: ${s.created_at ? s.created_at.slice(0, 10) : '-'}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        ${usaBtn}${editBtn}${delBtn}
+        ${editBtn}${delBtn}
       </div>
     </div>`;
   }).join('');

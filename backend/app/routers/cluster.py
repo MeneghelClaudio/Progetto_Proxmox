@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from typing import Any
 
 from ..database import get_db
-from ..auth import get_current_user, require_senior
+from ..auth import get_current_user, require_senior, require_admin
 from ..models import User, ProxmoxCredential
-from ..schemas import ClusterCreateIn, ClusterJoinIn
+from ..schemas import ClusterCreateIn, ClusterJoinIn, ClusterDestroyIn
+from ..crypto import decrypt_password
 from ..proxmox_client import (
     build_client, cluster_resources, cluster_status,
     node_status, node_rrddata,
@@ -241,3 +242,88 @@ def cluster_join(cred_id: int, payload: ClusterJoinIn,
         raise HTTPException(400, f"Join failed: {type(e).__name__}: {e}")
 
     return {"upid": upid, "joined": joining.name, "to": master.name}
+
+
+@router.post("/{cred_id}/cluster/destroy")
+def cluster_destroy(cred_id: int, payload: ClusterDestroyIn,
+                    db: Session = Depends(get_db),
+                    user: User = Depends(require_admin)):
+    """
+    Dissolve a PVE cluster on all nodes via SSH.
+
+    Runs the official cluster-removal sequence on every credential
+    supplied (primary + node_cred_ids). Uses the stored root password
+    for SSH authentication on port 22.
+    """
+    import paramiko
+
+    # Deduplicated list: primary first, then extra nodes
+    all_ids: list[int] = list(dict.fromkeys([cred_id] + list(payload.node_cred_ids)))
+
+    # Commands run sequentially on each node
+    CLEANUP_CMDS = [
+        "systemctl stop pve-cluster 2>/dev/null; true",
+        "systemctl stop corosync 2>/dev/null; true",
+        "pmxcfs -l >/dev/null 2>&1 &",
+        "sleep 2",
+        "rm -f /etc/pve/corosync.conf 2>/dev/null; true",
+        "rm -rf /etc/corosync/* 2>/dev/null; true",
+        "rm -f /etc/pve/cluster.conf 2>/dev/null; true",
+        "killall pmxcfs 2>/dev/null; true",
+        "systemctl start pve-cluster 2>/dev/null; true",
+    ]
+
+    results: list[dict] = []
+
+    for cid in all_ids:
+        cred = db.query(ProxmoxCredential).filter(
+            ProxmoxCredential.id == cid,
+            ProxmoxCredential.user_id == user.id,
+        ).first()
+        if not cred:
+            results.append({"cred_id": cid, "name": f"id={cid}", "host": "?",
+                             "success": False, "output": "", "error": "Credential not found"})
+            continue
+
+        node_result: dict = {
+            "cred_id": cred.id,
+            "name": cred.name,
+            "host": cred.host,
+            "success": False,
+            "output": "",
+            "error": None,
+        }
+
+        try:
+            password = decrypt_password(cred.encrypted_password)
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                hostname=cred.host,
+                port=22,
+                username="root",
+                password=password,
+                timeout=30,
+                banner_timeout=30,
+            )
+            output_lines: list[str] = []
+            for cmd in CLEANUP_CMDS:
+                _, stdout, stderr = client.exec_command(cmd, timeout=30)
+                out = stdout.read().decode("utf-8", errors="replace").strip()
+                err = stderr.read().decode("utf-8", errors="replace").strip()
+                if out:
+                    output_lines.append(out)
+                if err:
+                    output_lines.append(f"[stderr] {err}")
+            client.close()
+            node_result["output"] = "\n".join(output_lines)
+            node_result["success"] = True
+        except Exception as exc:
+            node_result["error"] = f"{type(exc).__name__}: {exc}"
+
+        results.append(node_result)
+
+    return {
+        "nodes": results,
+        "destroyed": all(r["success"] for r in results),
+    }

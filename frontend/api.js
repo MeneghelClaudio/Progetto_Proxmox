@@ -151,6 +151,7 @@ const clusterApi = {
   nodeRrd:  (credId, node, tf='hour') => apiRequest(`/api/clusters/${credId}/nodes/${node}/rrd?timeframe=${tf}`),
   create:   (payload)                 => apiRequest('/api/clusters', { method: 'POST', body: payload }),
   join:     (credId, payload)         => apiRequest(`/api/clusters/${credId}/cluster/join`, { method: 'POST', body: payload }),
+  destroy:  (credId, payload)         => apiRequest(`/api/clusters/${credId}/cluster/destroy`, { method: 'POST', body: payload }),
   resources:(credId, node)            => apiRequest(`/api/clusters/${credId}/nodes/${node}/resources`),
 };
 
