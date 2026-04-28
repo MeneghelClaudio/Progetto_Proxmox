@@ -230,6 +230,10 @@ class ClusterJoinIn(BaseModel):
     force: bool = False
 
 
+class ClusterLeaveIn(BaseModel):
+    node_cred_id: int
+
+
 class ClusterDestroyIn(BaseModel):
     node_cred_ids: list[int] = []
 

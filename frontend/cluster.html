@@ -313,26 +313,41 @@ async function loadData() {
 
 /**
  * Raggruppa le credenziali per nome cluster Proxmox (da tree.cluster.name).
- * Ogni gruppo diventa un cluster con primary = prima credenziale trovata.
+ * Ogni gruppo diventa un cluster con primary = credenziale quorate (o la prima online).
+ *
+ * Perché non la prima trovata: dopo una rimozione di nodo, il nodo rimosso può
+ * ancora rispondere all'API per qualche secondo e riportare il nome del cluster
+ * (stato transitorio). Preferendo il nodo quorate ci assicuriamo di usare come
+ * master il nodo che ha davvero il cluster attivo.
  */
 function discoverProxmoxClusters(allTrees) {
   const byName = {};
   for (const item of allTrees) {
     const clusterName = item.tree?.cluster?.name;
     if (!clusterName) continue;
+    const isQuorate = !!item.tree?.cluster?.quorate;
     if (!byName[clusterName]) {
       byName[clusterName] = {
-        id: `proxmox-${clusterName}`,
-        name: clusterName,
-        proxmox: true,          // flag: scoperto da Proxmox, non manuale
-        primary_id: item.cred_id,
-        node_ids: [],
+        id:               `proxmox-${clusterName}`,
+        name:             clusterName,
+        proxmox:          true,
+        primary_id:       item.cred_id,
+        _primaryQuorate:  isQuorate,
+        node_ids:         [],
       };
     } else {
-      byName[clusterName].node_ids.push(item.cred_id);
+      // Upgrade primary to this node if it is quorate and the current primary isn't
+      if (!byName[clusterName]._primaryQuorate && isQuorate) {
+        byName[clusterName].node_ids.push(byName[clusterName].primary_id);
+        byName[clusterName].primary_id      = item.cred_id;
+        byName[clusterName]._primaryQuorate = true;
+      } else {
+        byName[clusterName].node_ids.push(item.cred_id);
+      }
     }
   }
-  return Object.values(byName);
+  // Strip internal helper field before returning
+  return Object.values(byName).map(({ _primaryQuorate, ...c }) => c);
 }
 
 function saveClusters() {
@@ -588,14 +603,35 @@ function showJoinCmd(clusterId) {
   openModal('modal-join-info');
 }
 
-function removeFromCluster(clusterId, serverId) {
+async function removeFromCluster(clusterId, serverId) {
   const cluster = CLUSTERS.find(c => c.id === clusterId);
   if (!cluster) return;
-  if (!confirm(`Rimuovere il server dal cluster "${cluster.name}"?`)) return;
-  cluster.node_ids = (cluster.node_ids || []).filter(id => id !== serverId);
-  saveClusters();
-  renderAll();
-  showToast('Server rimosso dal cluster', 'warning');
+  const srv = SERVERS.find(s => s.id === serverId);
+  if (!confirm(
+    `Rimuovere "${srv?.name || serverId}" dal cluster "${cluster.name}"?\n\n` +
+    `Verranno eseguiti:\n` +
+    `• pvecm delnode sul master\n` +
+    `• pulizia configurazione cluster sul nodo rimosso`
+  )) return;
+
+  const toastId = showTaskToast(`Rimozione "${srv?.name || serverId}" dal cluster…`);
+
+  try {
+    const result = await clusterApi.leave(cluster.primary_id, { node_cred_id: serverId });
+
+    // Update local state only after backend confirmed success
+    cluster.node_ids = (cluster.node_ids || []).filter(id => id !== serverId);
+    saveClusters();
+    renderAll();
+
+    if (result.cleanup_warning) {
+      finishTaskToast(toastId, false, 'Rimosso con avviso', result.cleanup_warning);
+    } else {
+      finishTaskToast(toastId, true, `"${srv?.name || serverId}" rimosso dal cluster`);
+    }
+  } catch (e) {
+    finishTaskToast(toastId, false, 'Errore rimozione dal cluster', e.detail || e.message);
+  }
 }
 
 function openDestroyCluster(clusterId) {

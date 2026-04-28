@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..auth import get_current_user, require_senior, require_admin
 from ..models import User, ProxmoxCredential
-from ..schemas import ClusterCreateIn, ClusterJoinIn, ClusterDestroyIn
+from ..schemas import ClusterCreateIn, ClusterJoinIn, ClusterLeaveIn, ClusterDestroyIn
 from ..crypto import decrypt_password
 from ..proxmox_client import (
     build_client, cluster_resources, cluster_status,
@@ -740,6 +740,187 @@ def cluster_join(
         "link0":       link0,
         "fingerprint": fingerprint,
         "task":        task_result,
+    }
+
+
+@router.post("/{cred_id}/cluster/leave")
+def cluster_node_leave(
+    cred_id: int, payload: ClusterLeaveIn,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(require_senior),
+):
+    """
+    Remove a node from the cluster it belongs to.
+
+    Why NOT pvecm delnode
+    ─────────────────────
+    `pvecm delnode` writes to /etc/pve/ atomically by creating a temp file
+    (corosync.conf.new.tmp.XXXX).  The pmxcfs FUSE layer only allows writes to
+    a specific whitelist of known paths — arbitrary temp-file names are denied
+    even as root, so `pvecm delnode` reliably fails with "Permission denied".
+
+    Instead we:
+      1. Stop pve-cluster on the master (unmounts the FUSE, /etc/pve becomes a
+         plain directory that root can write).
+      2. Mount pmxcfs in local/standalone mode (-l flag) so the directory is
+         accessible while we edit it.
+      3. Use a small inline Python script to remove the leaving node's block
+         from corosync.conf and update expected_votes accordingly.
+      4. Kill the temporary pmxcfs process and restart pve-cluster + corosync.
+
+    Steps 5-8 mirror the same procedure on the leaving node so it becomes a
+    standalone Proxmox host again.
+    """
+    import paramiko
+
+    master  = _get_cred(db, user, cred_id)
+    leaving = _get_cred(db, user, payload.node_cred_id)
+
+    if master.pve_username != "root" or master.pve_realm != "pam":
+        raise HTTPException(400, "Il master richiede credenziali root@pam.")
+    if leaving.pve_username != "root" or leaving.pve_realm != "pam":
+        raise HTTPException(400, "Il nodo da rimuovere richiede credenziali root@pam.")
+
+    try:
+        master_password  = decrypt_password(master.encrypted_password)
+        leaving_password = decrypt_password(leaving.encrypted_password)
+    except Exception as e:
+        raise HTTPException(500, f"Errore decifratura credenziali: {e}")
+
+    # ── 1. Get the Proxmox node name from the leaving node via SSH ───────────
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        ssh.connect(hostname=leaving.host, port=22, username="root",
+                    password=leaving_password, timeout=20, banner_timeout=20)
+        _, hs, _ = ssh.exec_command("hostname", timeout=10)
+        leaving_node_name = hs.read().decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        raise HTTPException(400, f"Impossibile connettersi a {leaving.host} via SSH: {e}")
+    finally:
+        ssh.close()
+
+    if not leaving_node_name:
+        raise HTTPException(400, f"Impossibile determinare il nome Proxmox del nodo {leaving.host}.")
+
+    # ── 2. Edit corosync.conf on the master to remove the node ───────────────
+    #
+    # Inline Python script that:
+    #   • removes the node { ... } block whose name matches the leaving node
+    #   • decrements expected_votes by 1 (minimum 1)
+    # Written as a single-quoted shell argument so it survives SSH quoting.
+    py_edit = (
+        "import re, sys; "
+        "n=sys.argv[1]; "
+        "p='/etc/pve/corosync.conf'; "
+        "c=open(p).read(); "
+        "c=re.sub(r'\\n[ \\t]+node[ \\t]*\\{[^}]*\\bname:[ \\t]+'+re.escape(n)+'\\b[^}]*\\}','',c,flags=re.DOTALL); "
+        "rem=len(re.findall(r'^\\s+node\\s*\\{',c,re.MULTILINE)); "
+        "c=re.sub(r'(expected_votes:\\s*)\\d+',lambda m:m.group(1)+str(max(1,rem)),c); "
+        "open(p,'w').write(c); "
+        "print('OK',rem,'nodes remain')"
+    )
+
+    ssh_master = paramiko.SSHClient()
+    ssh_master.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    del_output = ""
+    try:
+        ssh_master.connect(hostname=master.host, port=22, username="root",
+                           password=master_password, timeout=30, banner_timeout=30)
+        # Correct restart order:
+        #   corosync MUST start before pve-cluster.
+        #   If pve-cluster starts first, it syncs from the running corosync
+        #   which might still hold the old node in its membership ring,
+        #   causing it to re-create /etc/pve/nodes/<leaving_node>/ and
+        #   show the red-X ghost in the web UI.
+        for cmd in [
+            # 1. Stop in reverse dependency order
+            "systemctl stop pve-cluster 2>/dev/null; true",
+            "systemctl stop corosync 2>/dev/null; true",
+            # 2. Mount pmxcfs in local (writable) mode
+            "pmxcfs -l >/dev/null 2>&1 &",
+            "sleep 3",
+            # 3. Edit corosync.conf — remove node block + update expected_votes
+            f"python3 -c {shlex.quote(py_edit)} {shlex.quote(leaving_node_name)}",
+            # 4. Delete node data dir — prevents ghost red-X in Proxmox web UI
+            f"rm -rf /etc/pve/nodes/{shlex.quote(leaving_node_name)} 2>/dev/null; true",
+            # 5. Unmount local pmxcfs
+            "killall pmxcfs 2>/dev/null; true",
+            "sleep 1",
+            # 6. Start corosync FIRST with the new single-node config
+            "systemctl start corosync 2>/dev/null; true",
+            "sleep 3",
+            # 7. Start pve-cluster — syncs from corosync (now 1 node only)
+            "systemctl start pve-cluster 2>/dev/null; true",
+        ]:
+            _, so, se = ssh_master.exec_command(cmd, timeout=30)
+            out = so.read().decode("utf-8", errors="replace").strip()
+            err = se.read().decode("utf-8", errors="replace").strip()
+            rc  = so.channel.recv_exit_status()
+            if out: del_output += out + "\n"
+            if err: del_output += err + "\n"
+            # Abort if the Python edit step fails
+            if "python3" in cmd and rc != 0:
+                raise RuntimeError(
+                    f"Modifica corosync.conf fallita (exit {rc}): {err or out}"
+                )
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"Errore SSH sul master ({master.host}): {e}")
+    finally:
+        ssh_master.close()
+
+    del_combined = del_output.strip()
+
+    # ── 3. Cleanup cluster config on the leaving node ────────────────────────
+    cleanup_warning: str | None = None
+    ssh_leave = paramiko.SSHClient()
+    ssh_leave.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        ssh_leave.connect(hostname=leaving.host, port=22, username="root",
+                          password=leaving_password, timeout=30, banner_timeout=30)
+        for cmd in [
+            "systemctl stop pve-cluster 2>/dev/null; true",
+            "systemctl stop corosync 2>/dev/null; true",
+            # Mount pmxcfs in local mode so /etc/pve/ is writable
+            "pmxcfs -l >/dev/null 2>&1 &",
+            "sleep 3",
+            # Remove cluster config from both locations:
+            # /etc/pve/corosync.conf  — managed by pve-cluster (pmxcfs)
+            # /etc/corosync/corosync.conf — used directly by corosync daemon
+            # Without removing both, corosync can still restart and try to
+            # re-join the cluster after pve-cluster restores the config.
+            "rm -f /etc/pve/corosync.conf 2>/dev/null; true",
+            "rm -f /etc/corosync/corosync.conf 2>/dev/null; true",
+            "rm -f /etc/corosync/authkey 2>/dev/null; true",
+            "killall pmxcfs 2>/dev/null; true",
+            "sleep 1",
+            # Start pve-cluster standalone (no corosync.conf → standalone mode)
+            "systemctl start pve-cluster 2>/dev/null; true",
+        ]:
+            _, cs, ce = ssh_leave.exec_command(cmd, timeout=20)
+            cs.read(); ce.read()
+    except Exception as e:
+        # delnode succeeded on master — the node IS removed from the cluster.
+        # Cleanup failure is non-fatal: report as a warning.
+        cleanup_warning = (
+            f"Nodo rimosso dal cluster, ma la pulizia del config su {leaving.host} "
+            f"è fallita ({e}). Potrebbe essere necessario rimuovere manualmente "
+            "/etc/pve/corosync.conf sul nodo."
+        )
+    finally:
+        ssh_leave.close()
+
+    invalidate_client(master.id)
+    invalidate_client(leaving.id)
+
+    return {
+        "node":                  leaving_node_name,
+        "removed_from_cluster":  True,
+        "cleanup_warning":       cleanup_warning,
+        "master":                master.name,
+        "output":                del_combined,
     }
 
 
