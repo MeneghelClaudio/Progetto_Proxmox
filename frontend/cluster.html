@@ -182,31 +182,38 @@ systemctl start pve-cluster</pre>
       </div>
     </div>
 
-    <!-- Modal: configura join -->
+    <!-- Modal: conferma join (automatico — no password richiesta) -->
     <div class="modal-overlay hidden" id="modal-join-info">
       <div class="modal" style="max-width:500px">
         <div class="modal-title">
           <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">link</span>
-          Configura Join al Cluster
+          Aggiungi nodo al Cluster
         </div>
         <div class="modal-sub" id="join-info-sub"></div>
+
+        <!-- Info automatiche -->
+        <div style="background:color-mix(in srgb,var(--accent) 10%,transparent);border:1px solid var(--accent);border-radius:var(--radius);padding:12px;margin-bottom:16px;font-size:12.5px">
+          <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px;color:var(--accent)">lock</span>
+          Le credenziali del nodo master vengono usate automaticamente dalle impostazioni salvate. Non è necessario inserire nessuna password.
+        </div>
+
+        <!-- Riepilogo master -->
+        <div id="join-master-info" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px;color:var(--text-muted);margin-bottom:14px"></div>
+
         <div class="form-group">
-          <label class="form-label">Indirizzo IP del nodo che entra nel cluster</label>
+          <label class="form-label">
+            Indirizzo corosync del nodo entrante
+            <span style="font-weight:400;color:var(--text-dim)"> — pre-compilato dall'host salvato, modifica solo se necessario</span>
+          </label>
           <input type="text" class="form-input" id="join-ip" placeholder="es. 192.168.1.101"/>
         </div>
-        <div class="form-group">
-          <label class="form-label">Password root del nodo master</label>
-          <div style="position:relative;display:block">
-            <input type="password" class="form-input" id="join-pass" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding-right:44px"/>
-            <button type="button" onclick="toggleJoinPass()" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px">
-              <span class="material-symbols-rounded" id="join-pass-eye" style="font-size:18px;pointer-events:none">visibility</span>
-            </button>
-          </div>
-        </div>
+
+        <!-- Comando equivalente (collassabile) -->
         <div id="join-info-box" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;color:var(--text-muted);margin-bottom:12px;display:none">
           <b>Comando equivalente sul nodo:</b><br>
           <code id="join-cmd" style="font-family:var(--mono);word-break:break-all"></code>
         </div>
+
         <div class="modal-footer">
           <button class="btn btn-secondary" onclick="closeModal('modal-join-info')">Annulla</button>
           <button class="btn btn-primary" onclick="executeJoin()">
@@ -243,16 +250,57 @@ async function loadData() {
   try {
     SERVERS = await credsApi.list();
   } catch { SERVERS = []; }
-  // Carica cluster dal backend (se esiste endpoint) oppure usa localStorage come fallback
+
+  // Cluster salvati solo in locale (creati manualmente dall'UI)
+  let localClusters = [];
   try {
     const raw = localStorage.getItem('pmx_clusters');
-    CLUSTERS = raw ? JSON.parse(raw) : [];
-  } catch { CLUSTERS = []; }
+    localClusters = raw ? JSON.parse(raw) : [];
+  } catch { localClusters = []; }
+
+  // Scopri i cluster reali già configurati su Proxmox
+  try {
+    const allTrees = await clusterApi.allTrees();
+    const proxmoxClusters = discoverProxmoxClusters(allTrees);
+    // I cluster Proxmox hanno priorità su quelli con lo stesso nome in localStorage
+    const proxmoxNames = new Set(proxmoxClusters.map(c => c.name));
+    const filteredLocal = localClusters.filter(c => !proxmoxNames.has(c.name));
+    CLUSTERS = [...proxmoxClusters, ...filteredLocal];
+  } catch {
+    CLUSTERS = localClusters;
+  }
+
   renderAll();
 }
 
+/**
+ * Raggruppa le credenziali per nome cluster Proxmox (da tree.cluster.name).
+ * Ogni gruppo diventa un cluster con primary = prima credenziale trovata.
+ */
+function discoverProxmoxClusters(allTrees) {
+  const byName = {};
+  for (const item of allTrees) {
+    const clusterName = item.tree?.cluster?.name;
+    if (!clusterName) continue;
+    if (!byName[clusterName]) {
+      byName[clusterName] = {
+        id: `proxmox-${clusterName}`,
+        name: clusterName,
+        proxmox: true,          // flag: scoperto da Proxmox, non manuale
+        primary_id: item.cred_id,
+        node_ids: [],
+      };
+    } else {
+      byName[clusterName].node_ids.push(item.cred_id);
+    }
+  }
+  return Object.values(byName);
+}
+
 function saveClusters() {
-  localStorage.setItem('pmx_clusters', JSON.stringify(CLUSTERS));
+  // Salva solo i cluster creati manualmente; quelli Proxmox vengono riscoperti al prossimo caricamento
+  const localOnly = CLUSTERS.filter(c => !c.proxmox);
+  localStorage.setItem('pmx_clusters', JSON.stringify(localOnly));
 }
 
 function renderAll() {
@@ -296,6 +344,13 @@ function renderClusters() {
   }
 
   el.innerHTML = CLUSTERS.map(cluster => {
+    // cid: safe JS literal for inline onclick="" attributes (single-quoted string
+    // or plain number). JSON.stringify gives "string" with double-quotes which
+    // would break the surrounding HTML double-quoted attribute.
+    const cid = typeof cluster.id === 'number'
+      ? cluster.id
+      : `'${String(cluster.id).replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+
     const primary = SERVERS.find(s => s.id === cluster.primary_id);
     const members = (cluster.node_ids || []).map(id => SERVERS.find(s => s.id === id)).filter(Boolean);
 
@@ -318,7 +373,7 @@ function renderClusters() {
           <div class="node-member-name">${escapeHtml(s.name)}</div>
           <div class="node-member-meta">${escapeHtml(s.host)}:${s.port}</div>
         </div>
-        <button class="btn btn-sm btn-danger" onclick="removeFromCluster(${cluster.id},${s.id})" title="Rimuovi dal cluster">
+        <button class="btn btn-sm btn-danger" onclick="removeFromCluster(${cid},${s.id})" title="Rimuovi dal cluster">
           <span class="material-symbols-rounded">remove_circle</span>
         </button>
       </div>`),
@@ -329,22 +384,26 @@ function renderClusters() {
       </div>`
     ].join('');
 
+    const proxmoxBadge = cluster.proxmox
+      ? `<span class="chip" style="background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-size:10px;padding:2px 7px;border-radius:99px;margin-left:6px">Proxmox</span>`
+      : '';
+
     return `<div class="cluster-card" style="margin-bottom:16px"
       id="cluster-card-${cluster.id}"
-      ondragover="onClusterDragOver(event,${cluster.id})"
-      ondragleave="onClusterDragLeave(event,${cluster.id})"
-      ondrop="onClusterDrop(event,${cluster.id})">
+      ondragover="onClusterDragOver(event,${cid})"
+      ondragleave="onClusterDragLeave(event,${cid})"
+      ondrop="onClusterDrop(event,${cid})">
       <div class="cluster-header">
         <span class="material-symbols-rounded" style="font-size:20px;color:var(--info)">hub</span>
-        <h3>${escapeHtml(cluster.name)}</h3>
+        <h3>${escapeHtml(cluster.name)}${proxmoxBadge}</h3>
         <span class="chip chip-running" style="margin-left:auto">${1 + members.length} nodi</span>
       </div>
       <div class="cluster-body">${memberHtml}</div>
       <div class="cluster-footer">
-        <button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cluster.id})">
+        <button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cid})">
           <span class="material-symbols-rounded">terminal</span> Comando join
         </button>
-        <button class="btn btn-sm btn-danger" onclick="openDestroyCluster(${cluster.id})" style="margin-left:auto">
+        <button class="btn btn-sm btn-danger" onclick="openDestroyCluster(${cid})" style="margin-left:auto">
           <span class="material-symbols-rounded">delete_forever</span> Elimina Cluster
         </button>
       </div>
@@ -384,39 +443,43 @@ function onClusterDrop(e, clusterId) {
   if (cluster.primary_id === draggedServerId || (cluster.node_ids || []).includes(draggedServerId)) {
     showToast('Il server è già in questo cluster', 'warning'); return;
   }
-  // Chiedi conferma join con IP + password
-  pendingJoin = { clusterId, serverId: draggedServerId };
-  const srv = SERVERS.find(s => s.id === draggedServerId);
-  const primary = SERVERS.find(s => s.id === cluster.primary_id);
-  document.getElementById('join-info-sub').textContent =
-    `Aggiungi "${srv?.name}" al cluster "${cluster.name}" (primario: ${primary?.name})`;
-  document.getElementById('join-ip').value = srv?.host || '';
-  document.getElementById('join-pass').value = '';
-  document.getElementById('join-info-box').style.display = 'none';
-  openModal('modal-join-info');
+  openJoinModal(clusterId, draggedServerId);
   draggedServerId = null;
 }
 
-function toggleJoinPass() {
-  const inp = document.getElementById('join-pass');
-  const icon = document.getElementById('join-pass-eye');
-  if (inp.type === 'password') { inp.type = 'text'; icon.textContent = 'visibility_off'; }
-  else { inp.type = 'password'; icon.textContent = 'visibility'; }
+function openJoinModal(clusterId, serverId) {
+  pendingJoin = { clusterId, serverId };
+  const srv     = SERVERS.find(s => s.id === serverId);
+  const cluster = CLUSTERS.find(c => c.id === clusterId);
+  const primary = SERVERS.find(s => s.id === cluster?.primary_id);
+
+  document.getElementById('join-info-sub').innerHTML =
+    `Aggiungi <b>${escapeHtml(srv?.name)}</b> al cluster <b>${escapeHtml(cluster?.name)}</b>`;
+
+  // Riepilogo master (credenziali automatiche)
+  document.getElementById('join-master-info').innerHTML =
+    `<span class="material-symbols-rounded" style="font-size:13px;vertical-align:middle;margin-right:4px">dns</span>
+     <b>Master:</b> ${escapeHtml(primary?.name)} &nbsp;·&nbsp;
+     <span style="font-family:var(--mono)">${escapeHtml(primary?.host)}:${primary?.port}</span>
+     &nbsp;·&nbsp; credenziali usate automaticamente`;
+
+  // Pre-compila link address con l'host del nodo entrante
+  document.getElementById('join-ip').value = srv?.host || '';
+  document.getElementById('join-info-box').style.display = 'none';
+  openModal('modal-join-info');
 }
 
 async function executeJoin() {
   if (!pendingJoin) return;
   const { clusterId, serverId } = pendingJoin;
-  const ip   = document.getElementById('join-ip').value.trim();
-  const pass = document.getElementById('join-pass').value;
-  if (!ip) { showToast('Inserisci l\'IP del nodo', 'warning'); return; }
-  if (!pass) { showToast('Inserisci la password root del nodo master', 'warning'); return; }
+  const ip = document.getElementById('join-ip').value.trim();
+  if (!ip) { showToast("Inserisci l'IP corosync del nodo entrante", 'warning'); return; }
 
   const cluster = CLUSTERS.find(c => c.id === clusterId);
-  const primary = SERVERS.find(s => s.id === cluster?.primary_id);
-  const credId  = getActiveCred();
+  const credId  = cluster?.primary_id;
+  const srvName = SERVERS.find(s => s.id === serverId)?.name || serverId;
 
-  const toastId = showTaskToast(`Join di ${SERVERS.find(s=>s.id===serverId)?.name} al cluster…`);
+  const toastId = showTaskToast(`Join di "${srvName}" al cluster "${cluster?.name}"…`);
   closeModal('modal-join-info');
 
   try {
@@ -425,13 +488,11 @@ async function executeJoin() {
       body: {
         node_cred_id: serverId,
         link0_address: ip,
-        master_host: primary?.host,
-        master_password: pass,
       }
     });
     cluster.node_ids = [...(cluster.node_ids || []), serverId];
     saveClusters();
-    finishTaskToast(toastId, true, 'Join completato');
+    finishTaskToast(toastId, true, `"${srvName}" aggiunto al cluster`);
     renderAll();
   } catch (e) {
     finishTaskToast(toastId, false, 'Errore join', e.detail || e.message);
@@ -445,9 +506,13 @@ function showJoinCmd(clusterId) {
   const cmd = `pvecm add ${primary?.host || '<master-ip>'} --link0 <node-ip>`;
   document.getElementById('join-cmd').textContent = cmd;
   document.getElementById('join-info-box').style.display = '';
-  document.getElementById('join-info-sub').textContent = `Comando da eseguire sui nodi da aggiungere al cluster "${cluster?.name}"`;
+  document.getElementById('join-info-sub').innerHTML =
+    `Comando da eseguire manualmente sui nodi da aggiungere al cluster <b>${escapeHtml(cluster?.name)}</b>`;
+  document.getElementById('join-master-info').innerHTML =
+    `<span class="material-symbols-rounded" style="font-size:13px;vertical-align:middle;margin-right:4px">dns</span>
+     <b>Master:</b> ${escapeHtml(primary?.name)} &nbsp;·&nbsp;
+     <span style="font-family:var(--mono)">${escapeHtml(primary?.host)}:${primary?.port}</span>`;
   document.getElementById('join-ip').value = '';
-  document.getElementById('join-pass').value = '';
   openModal('modal-join-info');
 }
 

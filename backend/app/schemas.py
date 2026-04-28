@@ -220,9 +220,9 @@ class ClusterCreateIn(BaseModel):
 
 class ClusterJoinIn(BaseModel):
     node_cred_id: int
-    link0_address: str
-    master_host: str
-    master_password: str
+    # link0_address: IP del nodo entrante per corosync.
+    # Se omesso, viene usato automaticamente l'host salvato nella credenziale.
+    link0_address: Optional[str] = None
 
 
 class ClusterDestroyIn(BaseModel):

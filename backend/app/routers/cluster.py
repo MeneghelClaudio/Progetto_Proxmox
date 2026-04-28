@@ -338,26 +338,67 @@ def cluster_join(
 
     try:
         master_px   = build_client(master)
-        info        = master_px.cluster.config.join.get()
-        fingerprint = (
-            info.get("nodelist", [{}])[0].get("pve_fp")
-            or info.get("totem", {}).get("cluster_name")
-        )
+        fingerprint = None
+
+        # Strategy 1: standard endpoint — returns nodelist with pve_fp fingerprint.
+        # This can fail with a 500 if the Proxmox node cannot resolve its own
+        # hostname internally (misconfigured /etc/hosts or DNS).
+        try:
+            info = master_px.cluster.config.join.get()
+            fingerprint = (
+                info.get("nodelist", [{}])[0].get("pve_fp")
+                or info.get("totem", {}).get("cluster_name")
+            )
+        except Exception:
+            pass   # fallback below
+
+        # Strategy 2: get the fingerprint from the node's TLS certificate.
+        # This call does NOT trigger hostname resolution, so it works even when
+        # the node's own hostname is not resolvable via DNS.
+        if not fingerprint:
+            nodes_list = master_px.nodes.get()
+            node_name  = nodes_list[0]["node"] if nodes_list else None
+            if node_name:
+                certs = master_px.nodes(node_name).certificates.info.get()
+                # Prefer the pve-ssl certificate; fall back to any cert with a fingerprint
+                fingerprint = next(
+                    (c.get("fingerprint") for c in certs
+                     if c.get("filename", "").endswith("pve-ssl.pem") and c.get("fingerprint")),
+                    None,
+                ) or next(
+                    (c.get("fingerprint") for c in certs if c.get("fingerprint")),
+                    None,
+                )
+
+        if not fingerprint:
+            raise HTTPException(502, "Could not determine cluster fingerprint from master node")
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(502, f"Could not read master join info: {type(e).__name__}: {e}")
+
+    # Master password is decrypted from stored credentials — no need to send it
+    # from the frontend.  link0 defaults to the joining node's registered host.
+    try:
+        master_password = decrypt_password(master.encrypted_password)
+    except Exception as e:
+        raise HTTPException(500, f"Could not decrypt master credentials: {e}")
+
+    link0 = payload.link0_address or joining.host
 
     try:
         joining_px = build_client(joining)
         upid = joining_px.cluster.config.join.post(
-            hostname=payload.master_host,
-            password=payload.master_password,
+            hostname=master.host,
+            password=master_password,
             fingerprint=fingerprint,
-            link0=payload.link0_address,
+            link0=link0,
         )
     except Exception as e:
         raise HTTPException(400, f"Join failed: {type(e).__name__}: {e}")
 
-    return {"upid": upid, "joined": joining.name, "to": master.name}
+    return {"upid": upid, "joined": joining.name, "to": master.name, "link0": link0}
 
 
 @router.post("/{cred_id}/cluster/destroy")

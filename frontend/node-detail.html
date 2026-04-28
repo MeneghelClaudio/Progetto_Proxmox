@@ -6,30 +6,34 @@
 <title>Nodi — ProxMox Manager</title>
 <link rel="stylesheet" href="shared.css" />
 <style>
-/* Server accordion */
-.server-section { margin-bottom: 24px; }
-.server-header {
-  display:flex; align-items:center; gap:10px;
-  padding:12px 16px; border-radius:var(--radius-lg);
+/* Pills bar — tutti i nodi in cima */
+.nodes-bar {
+  display:flex; gap:8px; flex-wrap:wrap;
   background:var(--surface); border:1px solid var(--border);
-  cursor:pointer; user-select:none;
-  transition:border-color .15s;
+  border-radius:var(--radius-lg); padding:14px 16px;
+  margin-bottom:20px;
 }
-.server-header:hover { border-color:var(--border2); }
-.server-header h2 { font-size:14px; font-weight:700; flex:1; margin:0; }
-.server-expand { font-size:14px; transition:transform .15s; color:var(--text-dim); }
-.server-expand.collapsed { transform:rotate(-90deg); }
-
-/* Node pills row */
-.node-pills { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 0 0; }
+.nodes-bar-label {
+  width:100%; font-size:10px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.6px; color:var(--text-dim); margin-bottom:4px;
+}
 .node-pill {
-  display:flex; align-items:center; gap:6px;
-  padding:7px 14px; border-radius:20px; cursor:pointer;
+  display:flex; align-items:center; gap:7px;
+  padding:8px 16px; border-radius:20px; cursor:pointer;
   border:1px solid var(--border); font-size:13px; font-weight:500;
-  background:var(--surface2); transition:all .15s;
+  background:var(--surface2); transition:all .15s; user-select:none;
 }
-.node-pill:hover  { border-color:var(--border2); }
+.node-pill:hover  { border-color:var(--border2); background:var(--surface3); }
 .node-pill.active { background:var(--accent-dim); border-color:var(--accent); color:var(--accent); }
+.node-pill-meta   { font-size:10px; color:var(--text-dim); line-height:1.2; margin-top:1px; }
+
+/* Node detail header */
+.node-detail-header {
+  display:flex; align-items:center; gap:12px;
+  padding:14px 0 12px; margin-bottom:4px;
+  border-bottom:1px solid var(--border);
+}
+.node-detail-header h2 { font-size:16px; font-weight:700; margin:0; flex:1; }
 
 /* Node detail panel */
 .node-panel { margin-top:16px; }
@@ -150,162 +154,138 @@ async function _bgRefresh() {
   _isRefreshing = false;
 }
 
-// ── AJAX patch: aggiorna status badge, pills, metriche, tabelle VM/CT ──────
-function _ajaxPatchDOM() {
-  ALL_SRV.forEach((srv, si) => {
-    const nodes   = srv.tree?.nodes || [];
-    const dotColor = srv.online ? 'var(--success)' : 'var(--danger)';
-    const statusLabel = srv.online
-      ? `${nodes.length} nod${nodes.length !== 1 ? 'i' : 'o'}`
-      : 'offline';
-
-    // ① Status badge nell'header accordeon
-    const chip = document.getElementById(`srv-status-${si}`);
-    if (chip) {
-      chip.className = `chip ${srv.online ? 'chip-running' : 'chip-stopped'}`;
-      chip.textContent = statusLabel;
-    }
-    const dot = document.getElementById(`srv-dot-${si}`);
-    if (dot) dot.style.color = dotColor;
-
-    // ② Node pills (stato running/stopped di ogni nodo)
-    const pillsEl = document.getElementById(`srv-pills-${si}`);
-    if (pillsEl) {
-      pillsEl.innerHTML = nodes.map(n => {
-        const key = `${srv.cred_id}:${n.id}`;
-        return `<div class="node-pill${key === _activeKey ? ' active' : ''}"
-                     onclick="selectNode(${srv.cred_id},'${escapeAttr(n.id)}')">
-          <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
-          <span class="material-symbols-rounded" style="font-size:16px">storage</span>
-          ${escapeHtml(n.name)}
-        </div>`;
-      }).join('');
-    }
-
-    // ③ Pannello nodo attivo: metriche + tabelle VM/CT
-    if (!_activeKey) return;
-    const activeNode = nodes.find(n => `${srv.cred_id}:${n.id}` === _activeKey);
-    if (!activeNode) return;
-
-    const credId = srv.cred_id;
-    const vms = (srv.tree?.vms || []).filter(v => v.node === activeNode.id && v.type === 'vm');
-    const cts = (srv.tree?.vms || []).filter(v => v.node === activeNode.id && v.type === 'ct');
-
-    const metricsEl = document.getElementById('active-metrics-grid');
-    if (metricsEl) {
-      metricsEl.classList.add('ajax-updating');
-      metricsEl.innerHTML = _renderMetricsGrid(activeNode);
-      metricsEl.classList.remove('ajax-updating');
-    }
-
-    const vmsTbody = document.getElementById('active-vms-tbody');
-    if (vmsTbody) {
-      vmsTbody.classList.add('ajax-updating');
-      vmsTbody.innerHTML = vms.length
-        ? vms.map(vm => renderVMRow(vm, credId)).join('')
-        : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessuna VM su questo nodo</td></tr>';
-      vmsTbody.classList.remove('ajax-updating');
-    }
-
-    const ctsTbody = document.getElementById('active-cts-tbody');
-    if (ctsTbody) {
-      ctsTbody.classList.add('ajax-updating');
-      ctsTbody.innerHTML = cts.length
-        ? cts.map(ct => renderVMRow(ct, credId)).join('')
-        : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessun container su questo nodo</td></tr>';
-      ctsTbody.classList.remove('ajax-updating');
-    }
-
-    const vmsCount = document.getElementById('active-vms-count');
-    const ctsCount = document.getElementById('active-cts-count');
-    if (vmsCount) vmsCount.textContent = vms.length;
-    if (ctsCount) ctsCount.textContent = cts.length;
+// ── Helpers: lista piatta di tutti i nodi da tutti i server ────────────────
+function _allNodes() {
+  const list = [];
+  ALL_SRV.forEach(srv => {
+    (srv.tree?.nodes || []).forEach(n => list.push({ ...n, srv }));
   });
+  return list;
 }
 
-// ── Render completo della pagina (prima volta, cambio nodo) ─────────────────
+// ── Render completo della pagina ────────────────────────────────────────────
 function render() {
   const el = document.getElementById('servers-content');
+
   if (!ALL_SRV.length) {
     el.innerHTML = `<div class="card"><p class="text-muted">Nessun server Proxmox configurato.
       <a href="servers.html" style="color:var(--accent)">Aggiungine uno</a>.</p></div>`;
     return;
   }
 
+  const allNodes = _allNodes();
+  if (!allNodes.length) {
+    el.innerHTML = `<div class="empty-state">
+      <span class="material-symbols-rounded">storage</span>
+      <h3>Nessun nodo disponibile</h3>
+      <p>I server configurati non hanno nodi raggiungibili.</p>
+    </div>`;
+    return;
+  }
+
+  // Imposta nodo attivo di default
   if (!_activeKey) {
     if (_urlCred && _urlNode) {
       _activeKey = `${_urlCred}:${_urlNode}`;
     } else {
-      const first = ALL_SRV.find(s => s.online && s.tree?.nodes?.length);
-      if (first) _activeKey = `${first.cred_id}:${first.tree.nodes[0].id}`;
+      const first = allNodes.find(n => n.status === 'running') || allNodes[0];
+      if (first) _activeKey = `${first.srv.cred_id}:${first.id}`;
     }
   }
 
-  el.innerHTML = ALL_SRV.map((srv, si) => renderServerSection(srv, si)).join('');
+  const multiServer = ALL_SRV.length > 1;
 
-  ALL_SRV.forEach((srv, si) => {
-    const hasActive = srv.tree?.nodes?.some(n => `${srv.cred_id}:${n.id}` === _activeKey);
-    if (!hasActive) return;
-    document.getElementById(`srv-nodes-${si}`)?.classList.remove('hidden');
-    document.getElementById(`srv-arrow-${si}`)?.classList.remove('collapsed');
-  });
-}
-
-function renderServerSection(srv, si) {
-  const nodes = srv.tree?.nodes || [];
-  const dotColor = srv.online ? 'var(--success)' : 'var(--danger)';
-  const statusLabel = srv.online
-    ? `${nodes.length} nod${nodes.length !== 1 ? 'i' : 'o'}`
-    : 'offline';
-  const hasActiveNode = nodes.some(n => `${srv.cred_id}:${n.id}` === _activeKey);
-  const startOpen = hasActiveNode || (si === 0 && !_activeKey);
-
-  return `
-    <div class="server-section">
-      <div class="server-header" onclick="toggleServerSection(${si})">
-        <span class="material-symbols-rounded" id="srv-dot-${si}" style="color:${dotColor};font-size:20px">dns</span>
-        <h2>${escapeHtml(srv.cred_name)}</h2>
-        <span class="text-xs text-muted mono">${escapeHtml(srv.host)}:${srv.port}</span>
-        <span class="chip ${srv.online ? 'chip-running' : 'chip-stopped'}" id="srv-status-${si}">${statusLabel}</span>
-        <span class="material-symbols-rounded server-expand${startOpen ? '' : ' collapsed'}" id="srv-arrow-${si}">expand_more</span>
+  // ── Pills bar: tutti i nodi in una riga ─────────────────────────────────
+  const pillsHtml = allNodes.map(n => {
+    const key = `${n.srv.cred_id}:${n.id}`;
+    const isActive = key === _activeKey;
+    const meta = multiServer
+      ? `<div class="node-pill-meta">${escapeHtml(n.srv.cred_name)}</div>` : '';
+    return `<div class="node-pill${isActive ? ' active' : ''}"
+                 id="pill-${n.srv.cred_id}-${escapeAttr(n.id)}"
+                 onclick="selectNode(${n.srv.cred_id},'${escapeAttr(n.id)}')">
+      <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
+      <span class="material-symbols-rounded" style="font-size:16px">storage</span>
+      <div>
+        <div>${escapeHtml(n.name)}</div>
+        ${meta}
       </div>
+    </div>`;
+  }).join('');
 
-      <div id="srv-nodes-${si}" class="${startOpen ? '' : 'hidden'}">
-        ${!srv.online
-          ? `<div style="padding:12px 4px;color:var(--text-dim);font-size:12px">
-               <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;color:var(--danger)">cloud_off</span>
-               Server non raggiungibile${srv.error ? ': ' + escapeHtml(srv.error) : ''}</div>`
-          : nodes.length === 0
-            ? `<div style="padding:12px 4px;color:var(--text-dim);font-size:12px">Nessun nodo disponibile.</div>`
-            : `<div class="node-pills" id="srv-pills-${si}">
-                 ${nodes.map(n => {
-                   const key = `${srv.cred_id}:${n.id}`;
-                   return `<div class="node-pill${key === _activeKey ? ' active' : ''}"
-                                onclick="selectNode(${srv.cred_id},'${escapeAttr(n.id)}')">
-                     <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
-                     <span class="material-symbols-rounded" style="font-size:16px">storage</span>
-                     ${escapeHtml(n.name)}
-                   </div>`;
-                 }).join('')}
-               </div>
-               ${renderActiveNodePanel(srv, nodes)}`
-        }
+  // ── Pannello dettaglio nodo attivo ───────────────────────────────────────
+  const activeEntry = allNodes.find(n => `${n.srv.cred_id}:${n.id}` === _activeKey);
+
+  el.innerHTML = `
+    <div class="nodes-bar" id="all-node-pills">
+      <div class="nodes-bar-label">
+        <span class="material-symbols-rounded" style="font-size:13px;vertical-align:middle;margin-right:4px">storage</span>
+        Server fisici — seleziona un nodo
       </div>
+      ${pillsHtml}
+    </div>
+    <div id="node-detail-panel">
+      ${activeEntry ? _renderNodeDetailFull(activeEntry.srv, activeEntry) : ''}
     </div>`;
 }
 
-function renderActiveNodePanel(srv, nodes) {
-  const activeNode = nodes.find(n => `${srv.cred_id}:${n.id}` === _activeKey);
-  if (!activeNode) return '';
-  return `<div class="node-panel">${renderNodeDetail(srv, activeNode)}</div>`;
+// ── Wrapper con header nodo sopra il dettaglio ──────────────────────────────
+function _renderNodeDetailFull(srv, node) {
+  const multiServer = ALL_SRV.length > 1;
+  const srvMeta = multiServer
+    ? `<span style="font-size:12px;color:var(--text-muted);font-family:var(--mono)">${escapeHtml(srv.cred_name)} · ${escapeHtml(srv.host)}</span>`
+    : '';
+  return `
+    <div class="node-detail-header">
+      <span class="material-symbols-rounded" style="font-size:22px;color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
+      <h2>${escapeHtml(node.name)}</h2>
+      ${srvMeta}
+      <span class="chip ${node.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="margin-left:auto">
+        <span class="status-dot ${node.status === 'running' ? 'running' : 'stopped'}"></span>
+        ${node.status}
+      </span>
+    </div>
+    ${renderNodeDetail(srv, node)}`;
 }
 
-function toggleServerSection(si) {
-  const panel = document.getElementById(`srv-nodes-${si}`);
-  const arrow = document.getElementById(`srv-arrow-${si}`);
-  if (!panel) return;
-  panel.classList.toggle('hidden');
-  if (arrow) arrow.classList.toggle('collapsed', panel.classList.contains('hidden'));
+// ── AJAX patch: aggiorna i pezzi già nel DOM senza re-render completo ───────
+function _ajaxPatchDOM() {
+  const allNodes = _allNodes();
+
+  // ① Aggiorna status dot di ogni pill
+  allNodes.forEach(n => {
+    const pill = document.getElementById(`pill-${n.srv.cred_id}-${n.id}`);
+    if (!pill) return;
+    const dot = pill.querySelector('.status-dot');
+    if (dot) dot.className = `status-dot ${n.status === 'running' ? 'running' : 'stopped'}`;
+  });
+
+  // ② Aggiorna metriche e tabelle del nodo attivo
+  if (!_activeKey) return;
+  const active = allNodes.find(n => `${n.srv.cred_id}:${n.id}` === _activeKey);
+  if (!active) return;
+
+  const credId = active.srv.cred_id;
+  const vms = (active.srv.tree?.vms || []).filter(v => v.node === active.id && v.type === 'vm');
+  const cts = (active.srv.tree?.vms || []).filter(v => v.node === active.id && v.type === 'ct');
+
+  const metricsEl = document.getElementById('active-metrics-grid');
+  if (metricsEl) metricsEl.innerHTML = _renderMetricsGrid(active);
+
+  const vmsTbody = document.getElementById('active-vms-tbody');
+  if (vmsTbody) vmsTbody.innerHTML = vms.length
+    ? vms.map(vm => renderVMRow(vm, credId)).join('')
+    : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessuna VM su questo nodo</td></tr>';
+
+  const ctsTbody = document.getElementById('active-cts-tbody');
+  if (ctsTbody) ctsTbody.innerHTML = cts.length
+    ? cts.map(ct => renderVMRow(ct, credId)).join('')
+    : '<tr><td colspan="7" class="text-muted" style="text-align:center;padding:24px">Nessun container su questo nodo</td></tr>';
+
+  const vmsCount = document.getElementById('active-vms-count');
+  const ctsCount = document.getElementById('active-cts-count');
+  if (vmsCount) vmsCount.textContent = vms.length;
+  if (ctsCount) ctsCount.textContent = cts.length;
 }
 
 function selectNode(credId, nodeId) {
