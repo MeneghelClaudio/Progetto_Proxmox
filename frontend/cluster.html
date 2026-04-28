@@ -133,9 +133,17 @@
         </div>
         <div class="form-group">
           <label class="form-label">Nodo primario (manager)</label>
-          <select class="form-input" id="nc-primary"></select>
+          <select class="form-input" id="nc-primary" onchange="onNcPrimaryChange()"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">
+            Indirizzo corosync (link0)
+            <span style="font-weight:400;color:var(--text-dim)"> — pre-compilato, modifica solo se necessario</span>
+          </label>
+          <input type="text" class="form-input" id="nc-link0" placeholder="es. 192.168.1.100"/>
         </div>
         <div class="modal-sub" style="margin-top:0">
+          Verrà eseguito <code style="font-family:var(--mono);font-size:11px">pvecm create</code> sul nodo primario via SSH (richiede credenziali root@pam).
           Dopo la creazione puoi aggiungere altri nodi trascinandoli nel cluster.
         </div>
         <div class="modal-footer">
@@ -262,6 +270,8 @@ async function loadData() {
     SERVERS = await credsApi.list();
   } catch { SERVERS = []; }
 
+  const validServerIds = new Set(SERVERS.map(s => s.id));
+
   // Cluster salvati solo in locale (creati manualmente dall'UI)
   let localClusters = [];
   try {
@@ -273,12 +283,29 @@ async function loadData() {
   try {
     const allTrees = await clusterApi.allTrees();
     const proxmoxClusters = discoverProxmoxClusters(allTrees);
-    // I cluster Proxmox hanno priorità su quelli con lo stesso nome in localStorage
+
+    // Track which credential IDs are confirmed to be in a real Proxmox cluster
+    const idsInProxmoxCluster = new Set();
+    for (const item of allTrees) {
+      if (item.tree?.cluster?.name) idsInProxmoxCluster.add(item.cred_id);
+    }
+
+    // I cluster Proxmox hanno priorità su quelli con lo stesso nome in localStorage.
+    // I cluster locali con primary_id non più valido (credenziale eliminata) vengono
+    // scartati per evitare l'errore "Credential not found" durante il join.
+    // I cluster locali il cui nodo primario non è in nessun cluster Proxmox vengono
+    // marcati come "ghost" (pvecm create non è mai stato eseguito) e mostrano un avviso.
     const proxmoxNames = new Set(proxmoxClusters.map(c => c.name));
-    const filteredLocal = localClusters.filter(c => !proxmoxNames.has(c.name));
+    const filteredLocal = localClusters
+      .filter(c => !proxmoxNames.has(c.name) && validServerIds.has(c.primary_id))
+      .map(c => ({ ...c, ghost: !idsInProxmoxCluster.has(c.primary_id) }));
+
     CLUSTERS = [...proxmoxClusters, ...filteredLocal];
   } catch {
-    CLUSTERS = localClusters;
+    // Fallback: tieni solo i cluster locali con primary_id ancora valido
+    CLUSTERS = localClusters
+      .filter(c => validServerIds.has(c.primary_id))
+      .map(c => ({ ...c, ghost: false }));
   }
 
   renderAll();
@@ -399,21 +426,41 @@ function renderClusters() {
       ? `<span class="chip" style="background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent);font-size:10px;padding:2px 7px;border-radius:99px;margin-left:6px">Proxmox</span>`
       : '';
 
-    return `<div class="cluster-card" style="margin-bottom:16px"
+    // Ghost cluster: local entry only, pvecm create was never run on the primary node
+    const ghostBadge = cluster.ghost
+      ? `<span class="chip" style="background:color-mix(in srgb,var(--warning) 18%,transparent);color:var(--warning);font-size:10px;padding:2px 7px;border-radius:99px;margin-left:6px">
+           <span class="material-symbols-rounded" style="font-size:11px;vertical-align:middle">warning</span> Non creato
+         </span>`
+      : '';
+
+    const ghostBanner = cluster.ghost
+      ? `<div style="background:color-mix(in srgb,var(--warning) 12%,transparent);border:1px solid var(--warning);
+                     border-radius:var(--radius);padding:10px 14px;margin:8px 0 4px;font-size:12px">
+           <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;color:var(--warning);margin-right:4px">warning</span>
+           <b>Cluster non creato su Proxmox.</b>
+           Questo cluster esiste solo in locale. Per usarlo:
+           <ol style="margin:6px 0 0 16px;padding:0;color:var(--text-muted)">
+             <li>Clicca <b>Elimina Cluster</b> per rimuovere questa voce</li>
+             <li>Clicca <b>Nuovo cluster</b> per crearlo davvero su Proxmox</li>
+           </ol>
+         </div>`
+      : '';
+
+    return `<div class="cluster-card" style="margin-bottom:16px${cluster.ghost ? ';opacity:.85' : ''}"
       id="cluster-card-${cluster.id}"
-      ondragover="onClusterDragOver(event,${cid})"
-      ondragleave="onClusterDragLeave(event,${cid})"
-      ondrop="onClusterDrop(event,${cid})">
+      ondragover="${cluster.ghost ? '' : `onClusterDragOver(event,${cid})`}"
+      ondragleave="${cluster.ghost ? '' : `onClusterDragLeave(event,${cid})`}"
+      ondrop="${cluster.ghost ? `onGhostDrop()` : `onClusterDrop(event,${cid})`}">
       <div class="cluster-header">
-        <span class="material-symbols-rounded" style="font-size:20px;color:var(--info)">hub</span>
-        <h3>${escapeHtml(cluster.name)}${proxmoxBadge}</h3>
+        <span class="material-symbols-rounded" style="font-size:20px;color:${cluster.ghost ? 'var(--warning)' : 'var(--info)'}">hub</span>
+        <h3>${escapeHtml(cluster.name)}${proxmoxBadge}${ghostBadge}</h3>
         <span class="chip chip-running" style="margin-left:auto">${1 + members.length} nodi</span>
       </div>
-      <div class="cluster-body">${memberHtml}</div>
+      <div class="cluster-body">${ghostBanner}${memberHtml}</div>
       <div class="cluster-footer">
-        <button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cid})">
+        ${cluster.ghost ? '' : `<button class="btn btn-sm btn-secondary" onclick="showJoinCmd(${cid})">
           <span class="material-symbols-rounded">terminal</span> Comando join
-        </button>
+        </button>`}
         <button class="btn btn-sm btn-danger" onclick="openDestroyCluster(${cid})" style="margin-left:auto">
           <span class="material-symbols-rounded">delete_forever</span> Elimina Cluster
         </button>
@@ -445,12 +492,17 @@ function onClusterDragLeave(e, clusterId) {
     document.getElementById(`cluster-card-${clusterId}`)?.classList.remove('drop-target');
   }
 }
+function onGhostDrop() {
+  showToast('Elimina questo cluster e ricrealo con "Nuovo cluster" prima di aggiungere nodi', 'warning');
+}
+
 function onClusterDrop(e, clusterId) {
   e.preventDefault();
   document.getElementById(`cluster-card-${clusterId}`)?.classList.remove('drop-target');
   if (!draggedServerId) return;
   const cluster = CLUSTERS.find(c => c.id === clusterId);
   if (!cluster) return;
+  if (cluster.ghost) { onGhostDrop(); draggedServerId = null; return; }
   if (cluster.primary_id === draggedServerId || (cluster.node_ids || []).includes(draggedServerId)) {
     showToast('Il server è già in questo cluster', 'warning'); return;
   }
@@ -598,23 +650,49 @@ async function executeDestroyCluster() {
 function openNewCluster() {
   const sel = document.getElementById('nc-primary');
   sel.innerHTML = SERVERS.map(s =>
-    `<option value="${s.id}">${escapeHtml(s.name)} — ${escapeHtml(s.host)}</option>`
+    `<option value="${s.id}" data-host="${escapeHtml(s.host)}">${escapeHtml(s.name)} — ${escapeHtml(s.host)}</option>`
   ).join('');
   document.getElementById('nc-name').value = '';
+  // Pre-fill link0 with the first server's host
+  const firstServer = SERVERS[0];
+  document.getElementById('nc-link0').value = firstServer?.host || '';
   openModal('modal-new-cluster');
 }
 
-function createCluster() {
-  const name = document.getElementById('nc-name').value.trim();
+function onNcPrimaryChange() {
+  const sel = document.getElementById('nc-primary');
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById('nc-link0').value = opt?.dataset?.host || '';
+}
+
+async function createCluster() {
+  const name      = document.getElementById('nc-name').value.trim();
   const primaryId = parseInt(document.getElementById('nc-primary').value);
-  if (!name) { showToast('Inserisci il nome del cluster', 'warning'); return; }
+  const link0     = document.getElementById('nc-link0').value.trim();
+  if (!name)      { showToast('Inserisci il nome del cluster', 'warning'); return; }
   if (!primaryId) { showToast('Seleziona un nodo primario', 'warning'); return; }
-  const id = Date.now();
-  CLUSTERS.push({ id, name, primary_id: primaryId, node_ids: [] });
-  saveClusters();
+  if (!link0)     { showToast("Inserisci l'indirizzo corosync (link0)", 'warning'); return; }
+
   closeModal('modal-new-cluster');
-  renderAll();
-  showToast(`Cluster "${name}" creato`, 'success');
+  const toastId = showTaskToast(`Creazione cluster "${name}" su Proxmox in corso…`);
+
+  try {
+    // This SSHes into the primary node and runs `pvecm create <name> --link0 <link0>`
+    await clusterApi.create({
+      name:             name,
+      primary_cred_id:  primaryId,
+      link0_address:    link0,
+    });
+
+    // Backend succeeded: persist locally so we can join nodes to it immediately
+    const id = `local-${Date.now()}`;
+    CLUSTERS.push({ id, name, primary_id: primaryId, node_ids: [] });
+    saveClusters();
+    renderAll();
+    finishTaskToast(toastId, true, `Cluster "${name}" creato — ora trascina altri nodi`);
+  } catch (e) {
+    finishTaskToast(toastId, false, 'Errore creazione cluster', e.detail || e.message);
+  }
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
@@ -628,7 +706,7 @@ document.addEventListener('keydown', e => {
   if (e.key !== 'Enter' || e.shiftKey) return;
   const m = document.querySelector('.modal-overlay:not(.hidden)');
   if (!m) return;
-  if (m.id === 'modal-new-cluster')  { e.preventDefault(); createCluster(); }
+  if (m.id === 'modal-new-cluster')  { e.preventDefault(); createCluster(); }  // async — fire and forget
   if (m.id === 'modal-join-info')    { e.preventDefault(); executeJoin(); }
 });
 

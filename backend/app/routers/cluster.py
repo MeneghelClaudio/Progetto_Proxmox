@@ -344,8 +344,16 @@ def create_cluster(
         # A local-only cluster created from the UI is not enough: the primary
         # node must run `pvecm create` so the following join has a valid
         # corosync configuration and nodelist.
+        #
+        # FIX: use `pvecm status | grep Quorate` instead of bare `pvecm status`
+        # so we only skip when a *valid, quorate* cluster is already running.
+        # A bare `pvecm status` exits 0 even when corosync is running with a
+        # broken/empty corosync.conf (left over from a previous failed attempt),
+        # which would cause `pvecm create` to be silently skipped and leave the
+        # master with an invalid config that causes every subsequent join to fail
+        # with "invalid corosync.conf ! no nodes found".
         create_cmd = (
-            f"pvecm status >/dev/null 2>&1 && "
+            f"pvecm status 2>&1 | grep -q 'Quorate:' && "
             f"echo '__PMX_CLUSTER_ALREADY_EXISTS__' || "
             f"pvecm create {shlex.quote(cluster_name)} --link0 {shlex.quote(link0)}"
         )
@@ -358,18 +366,45 @@ def create_cluster(
             400,
             f"Creazione cluster fallita sul nodo primario {primary.host}: {type(exc).__name__}: {exc}",
         )
-    finally:
-        client.close()
 
     combined = "\n".join(part for part in (out, err) if part).strip()
     if "__PMX_CLUSTER_ALREADY_EXISTS__" in combined:
+        client.close()
         raise HTTPException(
             400,
             f"Il nodo primario '{primary.name}' appartiene già a un cluster Proxmox. "
             "Apri o aggiorna quel cluster invece di crearne uno nuovo dallo stesso nodo.",
         )
     if exit_code != 0:
+        client.close()
         raise HTTPException(400, f"Creazione cluster fallita.\n{combined}".strip())
+
+    # FIX: wait for corosync to fully initialise before returning.
+    # `pvecm create` can exit 0 before corosync has written a valid nodelist
+    # to corosync.conf; a join attempt arriving seconds later would then see
+    # "invalid corosync.conf ! no nodes found" on the master side.
+    # We poll `pvecm status` until "Cluster information" appears (up to 30 s).
+    try:
+        _, v_stdout, _ = client.exec_command(
+            "for i in $(seq 1 30); do "
+            "  pvecm status 2>&1 | grep -q 'Cluster information' && exit 0; "
+            "  sleep 1; "
+            "done; exit 1",
+            timeout=40,
+        )
+        v_stdout.read()   # drain output
+        v_exit = v_stdout.channel.recv_exit_status()
+    except Exception:
+        v_exit = -1
+    finally:
+        client.close()
+
+    if v_exit != 0:
+        raise HTTPException(
+            400,
+            "Cluster creato ma corosync non si è avviato entro 30 secondi. "
+            "Controlla i log su proxmox (journalctl -u corosync) e riprova.",
+        )
 
     invalidate_client(primary.id)
 
@@ -413,14 +448,25 @@ def _ssh_cleanup_corosync(cred: "ProxmoxCredential") -> None:  # noqa: F821
     client.close()
 
 
-# Substrings in the Proxmox task log that indicate stale corosync state on
-# the joining node — we auto-clean and retry exactly once in this case.
-_COROSYNC_ERRORS = (
-    "invalid corosync.conf",
+# Substrings that identify corosync errors on the *joining* node.
+# These are safe to auto-clean (remove stale files from the joiner) and retry.
+_JOINING_COROSYNC_ERRORS = (
     "corosync.conf already exists",
     "authkey already exists",
     "corosync is already running",
 )
+
+# Substrings that identify corosync errors on the *master/cluster* node.
+# Cleaning the joining node won't help here — the master itself has a broken
+# config. Surface a clear error instead of silently retrying the wrong fix.
+_MASTER_COROSYNC_ERRORS = (
+    "An error occurred on the cluster node: invalid corosync.conf",
+    "cluster node: invalid corosync",
+    "no nodes found",
+)
+
+# Legacy alias kept for any other callers (covers both sides).
+_COROSYNC_ERRORS = _JOINING_COROSYNC_ERRORS + _MASTER_COROSYNC_ERRORS
 
 
 @router.post("/{cred_id}/cluster/join")
@@ -456,9 +502,11 @@ def cluster_join(
     except Exception as exc:
         raise HTTPException(
             400,
-            "Il nodo master non ha ancora un cluster Proxmox valido. "
-            "Crea prima il cluster reale sul nodo primario, poi riprova il join. "
-            f"(dettaglio API: {type(exc).__name__}: {exc})",
+            f"Il nodo master '{master.name}' ({master.host}) non è in nessun cluster Proxmox "
+            f"(dettaglio: {type(exc).__name__}: {exc}).\n\n"
+            "Soluzione: nel pannello 'Gestione Cluster' usa prima 'Elimina Cluster' per "
+            "rimuovere la voce locale, poi clicca 'Nuovo cluster' per creare il cluster "
+            "reale su Proxmox (il pulsante ora esegue pvecm create via SSH).",
         )
 
     if not (join_info.get("nodelist") or []):
@@ -573,40 +621,53 @@ def cluster_join(
     exitstatus = (task_result or {}).get("exitstatus", "unknown")
     log_snippet = (task_result or {}).get("log", "")
 
-    # ── 5. Auto-retry after corosync cleanup ─────────────────────────────────
-    # If the task log contains a stale-config indicator we SSH in, remove the
-    # offending files, and retry once — transparently, no user action needed.
-    if exitstatus not in ("OK", "unknown", "timeout", None) and any(
-        err in log_snippet for err in _COROSYNC_ERRORS
-    ):
-        if joining.pve_username != "root" or joining.pve_realm != "pam":
+    # ── 5. Auto-retry / error routing after corosync failures ────────────────
+    if exitstatus not in ("OK", "unknown", "timeout", None):
+
+        # 5a. Error is on the MASTER — the master's corosync.conf is invalid.
+        #     Cleaning the joining node won't help; surface a clear message.
+        if any(e in log_snippet for e in _MASTER_COROSYNC_ERRORS):
             raise HTTPException(
                 400,
-                "Il nodo da aggiungere ha configurazione corosync residua che "
-                "deve essere rimossa, ma le credenziali salvate non sono root@pam. "
-                f"({joining.pve_username}@{joining.pve_realm}) — "
-                "Aggiorna le credenziali del nodo con utente 'root' e realm 'pam' "
-                "oppure rimuovi manualmente i file /etc/pve/corosync.conf e "
-                "/etc/corosync/authkey sul nodo.",
-            )
-        try:
-            _ssh_cleanup_corosync(joining)
-        except Exception as ssh_exc:
-            raise HTTPException(
-                400,
-                f"Pulizia corosync fallita via SSH ({joining.host}): {ssh_exc}\n"
-                "Rimuovi manualmente /etc/pve/corosync.conf e /etc/corosync/authkey "
-                "sul nodo, poi riprova.",
+                f"Join fallito ({exitstatus}): la configurazione corosync del "
+                f"nodo master '{master.name}' ({master.host}) è invalida "
+                f"(no nodes found).\n\n"
+                "Soluzione: usa 'Elimina Cluster' per ripulire il nodo master, "
+                "poi ricrea il cluster e riprova il join.\n\n"
+                f"Dettaglio Proxmox: {log_snippet}".strip(),
             )
 
-        # Retry the join now that stale config is gone
-        try:
-            upid, task_result = _attempt_join()
-        except Exception as e:
-            raise HTTPException(400, f"Join fallito dopo pulizia corosync: {type(e).__name__}: {e}")
+        # 5b. Error is on the JOINING node — stale local corosync files.
+        #     Auto-clean and retry once, transparently.
+        if any(e in log_snippet for e in _JOINING_COROSYNC_ERRORS):
+            if joining.pve_username != "root" or joining.pve_realm != "pam":
+                raise HTTPException(
+                    400,
+                    "Il nodo da aggiungere ha configurazione corosync residua che "
+                    "deve essere rimossa, ma le credenziali salvate non sono root@pam. "
+                    f"({joining.pve_username}@{joining.pve_realm}) — "
+                    "Aggiorna le credenziali del nodo con utente 'root' e realm 'pam' "
+                    "oppure rimuovi manualmente i file /etc/pve/corosync.conf e "
+                    "/etc/corosync/authkey sul nodo.",
+                )
+            try:
+                _ssh_cleanup_corosync(joining)
+            except Exception as ssh_exc:
+                raise HTTPException(
+                    400,
+                    f"Pulizia corosync fallita via SSH ({joining.host}): {ssh_exc}\n"
+                    "Rimuovi manualmente /etc/pve/corosync.conf e /etc/corosync/authkey "
+                    "sul nodo, poi riprova.",
+                )
 
-        exitstatus  = (task_result or {}).get("exitstatus", "unknown")
-        log_snippet = (task_result or {}).get("log", "")
+            # Retry the join now that stale config is gone
+            try:
+                upid, task_result = _attempt_join()
+            except Exception as e:
+                raise HTTPException(400, f"Join fallito dopo pulizia corosync: {type(e).__name__}: {e}")
+
+            exitstatus  = (task_result or {}).get("exitstatus", "unknown")
+            log_snippet = (task_result or {}).get("log", "")
 
     # ── 6. Final status check ────────────────────────────────────────────────
     if exitstatus not in ("OK", "unknown", "timeout", None):
