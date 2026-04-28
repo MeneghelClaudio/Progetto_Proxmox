@@ -208,6 +208,17 @@ systemctl start pve-cluster</pre>
           <input type="text" class="form-input" id="join-ip" placeholder="es. 192.168.1.101"/>
         </div>
 
+        <!-- Avviso force join (mostrato solo quando necessario) -->
+        <div id="join-force-box" style="display:none;background:color-mix(in srgb,var(--warning) 12%,transparent);border:1px solid var(--warning);border-radius:var(--radius);padding:12px;margin-bottom:14px;font-size:12.5px">
+          <span class="material-symbols-rounded" style="font-size:15px;vertical-align:middle;margin-right:4px;color:var(--warning)">warning</span>
+          <b>Il nodo contiene già VM o container.</b><br>
+          <span style="color:var(--text-muted)">Proxmox blocca il join per sicurezza. Puoi forzare l'operazione: le VM rimarranno sul nodo ma potrebbero non essere visibili dal cluster finché non vengono migrate o rimosse.</span>
+          <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;font-size:13px">
+            <input type="checkbox" id="join-force-cb"/>
+            Forza il join (ignora la presenza di VM/CT)
+          </label>
+        </div>
+
         <!-- Comando equivalente (collassabile) -->
         <div id="join-info-box" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;color:var(--text-muted);margin-bottom:12px;display:none">
           <b>Comando equivalente sul nodo:</b><br>
@@ -447,7 +458,7 @@ function onClusterDrop(e, clusterId) {
   draggedServerId = null;
 }
 
-function openJoinModal(clusterId, serverId) {
+function openJoinModal(clusterId, serverId, showForce = false) {
   pendingJoin = { clusterId, serverId };
   const srv     = SERVERS.find(s => s.id === serverId);
   const cluster = CLUSTERS.find(c => c.id === clusterId);
@@ -456,23 +467,25 @@ function openJoinModal(clusterId, serverId) {
   document.getElementById('join-info-sub').innerHTML =
     `Aggiungi <b>${escapeHtml(srv?.name)}</b> al cluster <b>${escapeHtml(cluster?.name)}</b>`;
 
-  // Riepilogo master (credenziali automatiche)
   document.getElementById('join-master-info').innerHTML =
     `<span class="material-symbols-rounded" style="font-size:13px;vertical-align:middle;margin-right:4px">dns</span>
      <b>Master:</b> ${escapeHtml(primary?.name)} &nbsp;·&nbsp;
      <span style="font-family:var(--mono)">${escapeHtml(primary?.host)}:${primary?.port}</span>
      &nbsp;·&nbsp; credenziali usate automaticamente`;
 
-  // Pre-compila link address con l'host del nodo entrante
   document.getElementById('join-ip').value = srv?.host || '';
   document.getElementById('join-info-box').style.display = 'none';
+  document.getElementById('join-force-box').style.display = showForce ? '' : 'none';
+  document.getElementById('join-force-cb').checked = false;
+
   openModal('modal-join-info');
 }
 
 async function executeJoin() {
   if (!pendingJoin) return;
   const { clusterId, serverId } = pendingJoin;
-  const ip = document.getElementById('join-ip').value.trim();
+  const ip    = document.getElementById('join-ip').value.trim();
+  const force = document.getElementById('join-force-cb').checked;
   if (!ip) { showToast("Inserisci l'IP corosync del nodo entrante", 'warning'); return; }
 
   const cluster = CLUSTERS.find(c => c.id === clusterId);
@@ -486,8 +499,9 @@ async function executeJoin() {
     await apiRequest(`/api/clusters/${credId}/cluster/join`, {
       method: 'POST',
       body: {
-        node_cred_id: serverId,
+        node_cred_id:  serverId,
         link0_address: ip,
+        force:         force,
       }
     });
     cluster.node_ids = [...(cluster.node_ids || []), serverId];
@@ -495,7 +509,13 @@ async function executeJoin() {
     finishTaskToast(toastId, true, `"${srvName}" aggiunto al cluster`);
     renderAll();
   } catch (e) {
-    finishTaskToast(toastId, false, 'Errore join', e.detail || e.message);
+    const msg = e.detail || e.message || '';
+    if (msg.includes('virtual guests') || msg.includes('already contains')) {
+      finishTaskToast(toastId, false, 'Nodo con VM/CT esistenti', msg);
+      setTimeout(() => openJoinModal(clusterId, serverId, true), 400);
+    } else {
+      finishTaskToast(toastId, false, 'Errore join', msg);
+    }
   }
   pendingJoin = null;
 }

@@ -223,6 +223,8 @@ class ClusterJoinIn(BaseModel):
     # link0_address: IP del nodo entrante per corosync.
     # Se omesso, viene usato automaticamente l'host salvato nella credenziale.
     link0_address: Optional[str] = None
+    # force: bypassa i controlli pre-join di Proxmox (es. VM/CT già presenti).
+    force: bool = False
 
 
 class ClusterDestroyIn(BaseModel):

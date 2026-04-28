@@ -34,6 +34,7 @@ from ..crypto import decrypt_password
 from ..proxmox_client import (
     build_client, cluster_resources, cluster_status,
     node_status, node_rrddata,
+    get_tls_fingerprint, wait_for_task, upid_node,
 )
 from ..state import (
     get_cached_tree, get_stale_tree,
@@ -327,78 +328,233 @@ def create_cluster(
     }
 
 
+def _ssh_cleanup_corosync(cred: "ProxmoxCredential") -> None:  # noqa: F821
+    """
+    SSH into a node and remove stale corosync/cluster configuration files.
+
+    Called automatically when a join task fails with a corosync config error
+    (invalid corosync.conf, authkey already exists, corosync already running).
+    The credential must belong to root (root@pam) because only root can stop
+    corosync and delete files under /etc/pve and /etc/corosync.
+    """
+    import paramiko
+
+    password = decrypt_password(cred.encrypted_password)
+    client   = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        hostname=cred.host, port=22, username="root",
+        password=password, timeout=20, banner_timeout=20,
+    )
+    cmds = [
+        "systemctl stop corosync 2>/dev/null; true",
+        "rm -f /etc/pve/corosync.conf 2>/dev/null; true",
+        "rm -f /etc/corosync/authkey 2>/dev/null; true",
+    ]
+    for cmd in cmds:
+        _, stdout, stderr = client.exec_command(cmd, timeout=20)
+        stdout.read()   # drain so the channel doesn't block
+        stderr.read()
+    client.close()
+
+
+# Substrings in the Proxmox task log that indicate stale corosync state on
+# the joining node — we auto-clean and retry exactly once in this case.
+_COROSYNC_ERRORS = (
+    "invalid corosync.conf",
+    "corosync.conf already exists",
+    "authkey already exists",
+    "corosync is already running",
+)
+
+
 @router.post("/{cred_id}/cluster/join")
 def cluster_join(
     cred_id: int, payload: ClusterJoinIn,
     db:   Session = Depends(get_db),
     user: User    = Depends(require_senior),
 ):
+    """
+    Join a node (payload.node_cred_id) to the cluster managed by cred_id.
+
+    Fingerprint resolution order (most → least reliable):
+      1. Direct TLS socket inspection of master:port  ← no DNS required, exact cert
+      2. GET /cluster/config/join on the master        ← standard Proxmox API
+      3. GET /nodes/{n}/certificates/info              ← last-resort fallback
+
+    After posting the join task on the joining node, we poll the task UPID
+    until it completes or times out, so silent background failures are surfaced
+    as proper HTTP errors rather than a misleading 200 OK.
+
+    Auto-retry logic:
+      If the task fails because of stale corosync configuration on the joining
+      node (invalid corosync.conf / authkey already exists / corosync running),
+      the backend automatically SSHes in, removes the stale files, and retries
+      the join once — no user interaction required.
+    """
     joining = _get_cred(db, user, payload.node_cred_id)
     master  = _get_cred(db, user, cred_id)
 
+    # ── 1. Get fingerprint ───────────────────────────────────────────────────
+    fingerprint: str | None = None
+
+    # Strategy A: direct TLS inspection — works regardless of DNS, gives the
+    # exact SHA-256 pve_fp that Proxmox uses for cluster join verification.
     try:
-        master_px   = build_client(master)
-        fingerprint = None
+        fingerprint = get_tls_fingerprint(master.host, master.port)
+    except Exception:
+        pass
 
-        # Strategy 1: standard endpoint — returns nodelist with pve_fp fingerprint.
-        # This can fail with a 500 if the Proxmox node cannot resolve its own
-        # hostname internally (misconfigured /etc/hosts or DNS).
+    # Strategy B: GET /cluster/config/join (can fail if node DNS is broken)
+    if not fingerprint:
         try:
-            info = master_px.cluster.config.join.get()
-            fingerprint = (
-                info.get("nodelist", [{}])[0].get("pve_fp")
-                or info.get("totem", {}).get("cluster_name")
-            )
+            mpx  = build_client(master)
+            info = mpx.cluster.config.join.get()
+            fingerprint = (info.get("nodelist") or [{}])[0].get("pve_fp")
         except Exception:
-            pass   # fallback below
+            pass
 
-        # Strategy 2: get the fingerprint from the node's TLS certificate.
-        # This call does NOT trigger hostname resolution, so it works even when
-        # the node's own hostname is not resolvable via DNS.
-        if not fingerprint:
-            nodes_list = master_px.nodes.get()
+    # Strategy C: node certificates API
+    if not fingerprint:
+        try:
+            mpx        = build_client(master)
+            nodes_list = mpx.nodes.get()
             node_name  = nodes_list[0]["node"] if nodes_list else None
             if node_name:
-                certs = master_px.nodes(node_name).certificates.info.get()
-                # Prefer the pve-ssl certificate; fall back to any cert with a fingerprint
+                certs = mpx.nodes(node_name).certificates.info.get()
                 fingerprint = next(
                     (c.get("fingerprint") for c in certs
-                     if c.get("filename", "").endswith("pve-ssl.pem") and c.get("fingerprint")),
+                     if c.get("filename", "").endswith("pve-ssl.pem")
+                     and c.get("fingerprint")),
                     None,
                 ) or next(
                     (c.get("fingerprint") for c in certs if c.get("fingerprint")),
                     None,
                 )
+        except Exception:
+            pass
 
-        if not fingerprint:
-            raise HTTPException(502, "Could not determine cluster fingerprint from master node")
+    if not fingerprint:
+        raise HTTPException(
+            502,
+            "Impossibile leggere il fingerprint del nodo master. "
+            "Verifica che il server sia raggiungibile.",
+        )
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(502, f"Could not read master join info: {type(e).__name__}: {e}")
+    # ── 2. Decrypt stored master password ───────────────────────────────────
+    # Proxmox cluster join requires the root@pam (Linux root) password of the
+    # master node.  Warn if the stored credential uses a different user.
+    if master.pve_username != "root" or master.pve_realm != "pam":
+        raise HTTPException(
+            400,
+            f"Il join richiede le credenziali root@pam del master, "
+            f"ma la credenziale salvata usa '{master.pve_username}@{master.pve_realm}'. "
+            f"Aggiorna le credenziali del server master con utente 'root' e realm 'pam'.",
+        )
 
-    # Master password is decrypted from stored credentials — no need to send it
-    # from the frontend.  link0 defaults to the joining node's registered host.
+    # The POST /cluster/config/join endpoint on the joining node also requires
+    # root@pam — any other user gets a 401 "invalid PVE ticket" from Proxmox.
+    if joining.pve_username != "root" or joining.pve_realm != "pam":
+        raise HTTPException(
+            400,
+            f"Il join richiede le credenziali root@pam anche sul nodo entrante, "
+            f"ma la credenziale salvata usa '{joining.pve_username}@{joining.pve_realm}'. "
+            f"Aggiorna le credenziali del server '{joining.name}' con utente 'root' e realm 'pam'.",
+        )
+
     try:
         master_password = decrypt_password(master.encrypted_password)
     except Exception as e:
-        raise HTTPException(500, f"Could not decrypt master credentials: {e}")
+        raise HTTPException(500, f"Errore decifratura credenziali master: {e}")
 
     link0 = payload.link0_address or joining.host
 
-    try:
-        joining_px = build_client(joining)
-        upid = joining_px.cluster.config.join.post(
-            hostname=master.host,
-            password=master_password,
-            fingerprint=fingerprint,
-            link0=link0,
-        )
-    except Exception as e:
-        raise HTTPException(400, f"Join failed: {type(e).__name__}: {e}")
+    # ── 3. Helper: attempt one join and return the polled result ─────────────
+    from ..proxmox_client import invalidate_client
 
-    return {"upid": upid, "joined": joining.name, "to": master.name, "link0": link0}
+    def _attempt_join() -> tuple[str, dict | None]:
+        """Build a fresh client and post the join. Returns (upid, task_result)."""
+        invalidate_client(joining.id)
+        invalidate_client(master.id)
+        jpx = build_client(joining)
+        params: dict = {
+            "hostname":    master.host,
+            "password":    master_password,
+            "fingerprint": fingerprint,
+            "link0":       link0,
+        }
+        if payload.force:
+            params["force"] = 1
+        uid = jpx.cluster.config.join.post(**params)
+
+        result: dict | None = None
+        poll_node = upid_node(uid) if isinstance(uid, str) else None
+        if poll_node:
+            try:
+                result = wait_for_task(jpx, poll_node, uid, timeout=120)
+            except Exception:
+                pass
+        return uid, result
+
+    # ── 4. First attempt ─────────────────────────────────────────────────────
+    try:
+        upid, task_result = _attempt_join()
+    except Exception as e:
+        raise HTTPException(400, f"Join fallito: {type(e).__name__}: {e}")
+
+    exitstatus = (task_result or {}).get("exitstatus", "unknown")
+    log_snippet = (task_result or {}).get("log", "")
+
+    # ── 5. Auto-retry after corosync cleanup ─────────────────────────────────
+    # If the task log contains a stale-config indicator we SSH in, remove the
+    # offending files, and retry once — transparently, no user action needed.
+    if exitstatus not in ("OK", "unknown", "timeout", None) and any(
+        err in log_snippet for err in _COROSYNC_ERRORS
+    ):
+        if joining.pve_username != "root" or joining.pve_realm != "pam":
+            raise HTTPException(
+                400,
+                "Il nodo da aggiungere ha configurazione corosync residua che "
+                "deve essere rimossa, ma le credenziali salvate non sono root@pam. "
+                f"({joining.pve_username}@{joining.pve_realm}) — "
+                "Aggiorna le credenziali del nodo con utente 'root' e realm 'pam' "
+                "oppure rimuovi manualmente i file /etc/pve/corosync.conf e "
+                "/etc/corosync/authkey sul nodo.",
+            )
+        try:
+            _ssh_cleanup_corosync(joining)
+        except Exception as ssh_exc:
+            raise HTTPException(
+                400,
+                f"Pulizia corosync fallita via SSH ({joining.host}): {ssh_exc}\n"
+                "Rimuovi manualmente /etc/pve/corosync.conf e /etc/corosync/authkey "
+                "sul nodo, poi riprova.",
+            )
+
+        # Retry the join now that stale config is gone
+        try:
+            upid, task_result = _attempt_join()
+        except Exception as e:
+            raise HTTPException(400, f"Join fallito dopo pulizia corosync: {type(e).__name__}: {e}")
+
+        exitstatus  = (task_result or {}).get("exitstatus", "unknown")
+        log_snippet = (task_result or {}).get("log", "")
+
+    # ── 6. Final status check ────────────────────────────────────────────────
+    if exitstatus not in ("OK", "unknown", "timeout", None):
+        raise HTTPException(
+            400,
+            f"Join task fallito ({exitstatus}).\n{log_snippet}".strip(),
+        )
+
+    return {
+        "upid":        upid,
+        "joined":      joining.name,
+        "to":          master.name,
+        "link0":       link0,
+        "fingerprint": fingerprint,
+        "task":        task_result,
+    }
 
 
 @router.post("/{cred_id}/cluster/destroy")

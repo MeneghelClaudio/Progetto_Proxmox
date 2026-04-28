@@ -8,6 +8,9 @@ by the routers (cluster resources, node stats, vm actions, migrations...).
 
 from __future__ import annotations
 
+import hashlib
+import socket
+import ssl
 import threading
 import time
 import urllib3
@@ -225,6 +228,71 @@ def task_status(px, node: str, upid: str) -> dict:
 
 def task_log(px, node: str, upid: str, start: int = 0, limit: int = 50) -> list[dict]:
     return px.nodes(node).tasks(upid).log.get(start=start, limit=limit)
+
+
+def upid_node(upid: str) -> str:
+    """Extract the node name from a Proxmox UPID.
+    Format: UPID:<node>:<pid>:<pstart>:<starttime>:<type>:<id>:<user>:
+    """
+    parts = upid.split(":")
+    return parts[1] if len(parts) > 2 else ""
+
+
+def wait_for_task(
+    px,
+    node: str,
+    upid: str,
+    timeout: int = 120,
+    poll_interval: int = 3,
+) -> dict:
+    """
+    Poll a Proxmox task UPID until it completes or the timeout expires.
+
+    Returns a dict:
+      { "exitstatus": "OK" | "<error string>" | "timeout",
+        "log":        "<last task log lines — only populated on failure>" }
+
+    The node API may be briefly unavailable during a cluster join (services
+    restart), so transient connection errors are silently retried.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            st = px.nodes(node).tasks(upid).status.get()
+            if st.get("status") == "stopped":
+                result: dict = {"exitstatus": st.get("exitstatus", "unknown")}
+                if result["exitstatus"] != "OK":
+                    try:
+                        lines = px.nodes(node).tasks(upid).log.get(limit=30)
+                        result["log"] = "\n".join(ln.get("t", "") for ln in lines)
+                    except Exception:
+                        pass
+                return result
+        except Exception:
+            pass   # node temporarily unreachable during cluster join
+        time.sleep(poll_interval)
+    return {"exitstatus": "timeout",
+            "log": "Join task timed out — verify status in the Proxmox web UI"}
+
+
+def get_tls_fingerprint(host: str, port: int = 8006, timeout: int = 10) -> str:
+    """
+    Return the SHA-256 fingerprint of the TLS certificate served by host:port,
+    formatted as uppercase colon-separated hex pairs (Proxmox style).
+
+    SSL verification is intentionally disabled so we get the raw certificate
+    even when the node uses a self-signed cert.  This is the same fingerprint
+    shown in the Proxmox «Cluster Join» dialog and returned by
+    GET /cluster/config/join as ``pve_fp``.
+    """
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((host, port), timeout=timeout) as raw:
+        with ctx.wrap_socket(raw, server_hostname=host) as ssock:
+            cert_der = ssock.getpeercert(binary_form=True)
+    digest = hashlib.sha256(cert_der).hexdigest()
+    return ":".join(digest[i : i + 2].upper() for i in range(0, len(digest), 2))
 
 
 # ---------- Resource discovery (for create forms) ----------
