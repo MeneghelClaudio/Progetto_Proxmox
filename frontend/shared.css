@@ -289,7 +289,7 @@ a:hover { color: var(--accent-h); }
 }
 .btn .material-symbols-rounded { font-size: 18px; }
 .btn-primary { background: var(--accent); color: #fff; }
-.btn-primary:hover { background: var(--accent-h); }
+.btn-primary:hover { background: var(--accent-h); color: #fff; }
 .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:hover { background: var(--surface3); border-color: var(--border2); }
 .btn-danger { background: var(--danger-dim); color: var(--danger); border: 1px solid var(--danger-dim); }
