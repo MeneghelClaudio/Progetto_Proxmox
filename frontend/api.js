@@ -272,6 +272,7 @@ function normalizeTree(tree) {
       id: n.node,
       name: n.node,
       status: n.status === 'online' ? 'running' : 'stopped',
+      local: !!n.local,   // true = nodo a cui questa credenziale si connette direttamente
       cpu: cpuPct,
       mem: memPct,
       disk: diskPct,
@@ -333,13 +334,22 @@ function normalizeTree(tree) {
     status: tree.cluster.quorate ? 'ok' : 'degraded',
   }] : [];
 
-  const backupServers = (tree.backup_targets || []).map(bt => ({
-    id: `${bt.node}/${bt.storage}`,
-    name: bt.storage,
-    status: 'running',
-    diskTotal: bt.total ? Math.round(bt.total / (1024 ** 2)) : 0, // MB
-    diskUsed:  bt.used  ? Math.round(bt.used  / (1024 ** 2)) : 0,
-  }));
+  // Deduplicate backup targets by storage name — a shared PBS visible from
+  // multiple nodes appears once per node in cluster_resources.
+  const seenBt = new Set();
+  const backupServers = (tree.backup_targets || []).reduce((acc, bt) => {
+    if (!seenBt.has(bt.storage)) {
+      seenBt.add(bt.storage);
+      acc.push({
+        id: bt.storage,           // keyed by name, not node/name
+        name: bt.storage,
+        status: 'running',
+        diskTotal: bt.total ? Math.round(bt.total / (1024 ** 2)) : 0, // MB
+        diskUsed:  bt.used  ? Math.round(bt.used  / (1024 ** 2)) : 0,
+      });
+    }
+    return acc;
+  }, []);
 
   return { nodes, vms, clusters, backupServers };
 }

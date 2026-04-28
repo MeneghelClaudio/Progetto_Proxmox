@@ -86,6 +86,11 @@ def _build_tree(px) -> dict:
             "id":      n.get("id"),
             "ip":      n.get("ip"),
             "level":   n.get("level"),
+            # True only for the node this credential directly connects to.
+            # Used by the frontend to deduplicate physical servers: when the same
+            # node appears in multiple credential trees (cluster members), the entry
+            # marked local=True carries the authoritative stats for that machine.
+            "local":   n.get("local", 0) == 1,
             "type":    "node",
             "vms":     [],
             "cts":     [],
@@ -156,10 +161,21 @@ def _build_tree(px) -> dict:
             if r.get("content") and "backup" in (r.get("content") or ""):
                 backup_targets.append(storage_obj)
 
+    # Deduplicate backup_targets by storage name.
+    # A shared PBS storage appears once per cluster node in cluster_resources,
+    # but it is the same physical target — keep only one entry per storage name.
+    seen_bt: set[str] = set()
+    unique_backup_targets: list[dict] = []
+    for bt in backup_targets:
+        key = bt["storage"]
+        if key not in seen_bt:
+            seen_bt.add(key)
+            unique_backup_targets.append(bt)
+
     return {
         "cluster":        cluster_info,
         "nodes":          list(by_node.values()),
-        "backup_targets": backup_targets,
+        "backup_targets": unique_backup_targets,
     }
 
 

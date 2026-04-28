@@ -155,12 +155,37 @@ async function _bgRefresh() {
 }
 
 // ── Helpers: lista piatta di tutti i nodi da tutti i server ────────────────
+// Ogni nodo fisico (identificato dal suo hostname/nome) viene incluso UNA SOLA
+// volta, anche se appare in più alberi (es. server in cluster con credenziali
+// multiple). Viene preferita la credenziale il cui host corrisponde al nodo.
 function _allNodes() {
-  const list = [];
+  // Prima passata: raccogli tutti gli entry con metadati
+  const candidates = [];
   ALL_SRV.forEach(srv => {
-    (srv.tree?.nodes || []).forEach(n => list.push({ ...n, srv }));
+    (srv.tree?.nodes || []).forEach(n => {
+      candidates.push({ ...n, srv });
+    });
   });
-  return list;
+
+  // Deduplicazione per nome nodo (case-insensitive).
+  // Preferenza: entry con local=true (nodo direttamente connesso alla credenziale)
+  // → ha statistiche reali e aggiornate indipendentemente dallo stato del cluster.
+  // Se nessuna entry è local (es. cache vecchia), vince la prima occorrenza.
+  const byName = new Map(); // name.lower → entry
+  candidates.forEach(entry => {
+    const key = entry.name.toLowerCase();
+    if (!byName.has(key)) {
+      byName.set(key, entry);
+    } else {
+      const existing = byName.get(key);
+      // Sostituisci solo se il nuovo entry è "local" e quello esistente non lo è
+      if (entry.local && !existing.local) {
+        byName.set(key, entry);
+      }
+    }
+  });
+
+  return Array.from(byName.values());
 }
 
 // ── Render completo della pagina ────────────────────────────────────────────
@@ -199,8 +224,8 @@ function render() {
   const pillsHtml = allNodes.map(n => {
     const key = `${n.srv.cred_id}:${n.id}`;
     const isActive = key === _activeKey;
-    const meta = multiServer
-      ? `<div class="node-pill-meta">${escapeHtml(n.srv.cred_name)}</div>` : '';
+    const clusterName = (n.srv.tree?.clusters || []).find(c => (c.nodes || []).includes(n.id))?.name || null;
+    const meta = clusterName ? `<div class="node-pill-meta">${escapeHtml(clusterName)}</div>` : '';
     return `<div class="node-pill${isActive ? ' active' : ''}"
                  id="pill-${n.srv.cred_id}-${escapeAttr(n.id)}"
                  onclick="selectNode(${n.srv.cred_id},'${escapeAttr(n.id)}')">

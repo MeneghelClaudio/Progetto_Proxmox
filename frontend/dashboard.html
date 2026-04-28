@@ -183,33 +183,89 @@ async function doRefresh() {
 // Merge all per-server trees into one DATA object.
 // Nodes/VMs carry server_id to avoid ID collisions across servers.
 function aggregateAll(allSrv) {
-  const nodes = [], vms = [], clusters = [], backupServers = [];
+  const vms = [];
+  const backupMap = new Map(); // storage name → entry (deduplicato)
+
+  // ── Nodi: deduplicazione per nome (case-insensitive) ──────────────────────
+  // Ogni server fisico viene incluso UNA SOLA VOLTA.
+  // Quando lo stesso nodo appare in più alberi (es. cluster con più credenziali)
+  // preferiamo l'entry marcata local=true, che ha le statistiche reali dirette.
+  const nodeMap = new Map(); // name.lower → entry
 
   allSrv.forEach(srv => {
     if (!srv.tree) return;
-    const t = srv.tree;
+    srv.tree.nodes.forEach(n => {
+      const key = n.name.toLowerCase();
+      const entry = { ...n, server_id: srv.cred_id, server_name: srv.cred_name };
+      if (!nodeMap.has(key)) {
+        nodeMap.set(key, entry);
+      } else if (n.local && !nodeMap.get(key).local) {
+        // Il nodo locale ha stats aggiornate direttamente — sostituisce l'entry
+        nodeMap.set(key, entry);
+      }
+    });
 
-    t.nodes.forEach(n => nodes.push({ ...n, server_id: srv.cred_id, server_name: srv.cred_name }));
-    t.vms.forEach(v => vms.push({ ...v, server_id: srv.cred_id }));
+    srv.tree.vms.forEach(v => vms.push({ ...v, server_id: srv.cred_id }));
+    srv.tree.backupServers.forEach(b => {
+      // Deduplica per nome: stesso PBS condiviso tra più credenziali → una sola card
+      if (!backupMap.has(b.name)) backupMap.set(b.name, { ...b, server_name: srv.cred_name });
+    });
+  });
 
-    if (t.clusters.length) {
-      t.clusters.forEach(c => clusters.push({ ...c, server_id: srv.cred_id, server_name: srv.cred_name }));
-    } else if (t.nodes.length) {
-      // Standalone server — show as a pseudo-cluster entry in the Cluster tab
-      clusters.push({
-        id: 'standalone-' + srv.cred_id,
+  const nodes = Array.from(nodeMap.values());
+
+  // ── Cluster: deduplicazione per nome ──────────────────────────────────────
+  // Se lo stesso cluster Proxmox (stesso nome) appare in più alberi di credenziali
+  // diverse, lo mostriamo una sola volta. Preferiamo l'entry dal nodo quorate
+  // (status === 'ok') o, a parità, dal server elaborato per primo.
+  const clusterMap = new Map(); // cluster name.lower → entry
+
+  allSrv.forEach(srv => {
+    if (!srv.tree) return;
+    srv.tree.clusters.forEach(c => {
+      const key = c.name.toLowerCase();
+      const entry = { ...c, server_id: srv.cred_id, server_name: srv.cred_name };
+      if (!clusterMap.has(key)) {
+        clusterMap.set(key, entry);
+      } else {
+        // Sostituisci solo se la nuova entry è quorate e quella esistente non lo è
+        const existing = clusterMap.get(key);
+        if (entry.status === 'ok' && existing.status !== 'ok') {
+          clusterMap.set(key, entry);
+        }
+      }
+    });
+  });
+
+  // ── Standalone: solo per nodi NON già coperti da un cluster reale ─────────
+  // Raccoglie tutti i node-id che fanno già parte di un cluster reale
+  const clusterNodeIds = new Set(
+    [...clusterMap.values()].flatMap(c => c.nodes || [])
+  );
+
+  allSrv.forEach(srv => {
+    if (!srv.tree || srv.tree.clusters.length > 0) return;
+    // Considera solo i nodi di questo server che non compaiono in nessun cluster
+    const standaloneNodes = srv.tree.nodes.filter(n => !clusterNodeIds.has(n.id));
+    if (!standaloneNodes.length) return;
+
+    // Evita duplicati: se esiste già uno standalone con lo stesso credId, salta
+    const key = 'standalone-' + srv.cred_id;
+    if (!clusterMap.has(key)) {
+      clusterMap.set(key, {
+        id: key,
         name: srv.cred_name,
-        nodes: t.nodes.map(n => n.id),
+        nodes: standaloneNodes.map(n => n.id),
         status: 'ok',
         server_id: srv.cred_id,
         server_name: srv.cred_name,
         standalone: true,
       });
     }
-
-    t.backupServers.forEach(b => backupServers.push({ ...b, server_name: srv.cred_name }));
   });
 
+  const clusters = Array.from(clusterMap.values());
+  const backupServers = Array.from(backupMap.values());
   return { nodes, vms, clusters, backupServers };
 }
 
@@ -260,7 +316,7 @@ function renderNodes() {
   return `<div class="node-grid">${DATA.nodes.map(node => {
     const vms = DATA.vms.filter(v => v.node === node.id && v.server_id === node.server_id);
     const vmList = vms.slice(0, 6).map(v => `
-      <a href="vm-detail.html?id=${v.id}" class="chip ${v.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="text-decoration:none">
+      <a href="vm-detail.html?cred=${node.server_id}&id=${v.id}" class="chip ${v.status === 'running' ? 'chip-running' : 'chip-stopped'}" style="text-decoration:none">
         <span class="material-symbols-rounded" style="font-size:12px">${v.type === 'vm' ? 'computer' : 'deployed_code'}</span>
         ${escapeHtml(v.name)}
       </a>`).join('');
@@ -271,7 +327,7 @@ function renderNodes() {
       <div class="node-card-header">
         <span class="material-symbols-rounded" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
         <div style="flex:1;min-width:0">
-          <h3><a href="node-detail.html?id=${node.id}" style="color:var(--text);text-decoration:none">${escapeHtml(node.name)}</a></h3>
+          <h3><a href="node-detail.html?cred=${node.server_id}&id=${node.id}" style="color:var(--text);text-decoration:none">${escapeHtml(node.name)}</a></h3>
           <div class="text-xs text-muted">Uptime: ${node.uptime}</div>
         </div>
         ${serverBadge}
@@ -298,7 +354,7 @@ function renderClusters() {
   return `<div class="node-grid">${DATA.clusters.map(cl => {
     const clNodes = DATA.nodes.filter(n => cl.nodes.includes(n.id) && n.server_id === cl.server_id);
     const pills = clNodes.map(n => `
-      <a href="node-detail.html?id=${n.id}" class="cluster-node-pill">
+      <a href="node-detail.html?cred=${n.server_id}&id=${n.id}" class="cluster-node-pill">
         <span class="status-dot ${n.status === 'running' ? 'running' : 'stopped'}"></span>
         ${escapeHtml(n.name)}
         <span class="text-xs text-muted">${DATA.vms.filter(v => v.node === n.id && v.server_id === cl.server_id).length} VM/CT</span>
