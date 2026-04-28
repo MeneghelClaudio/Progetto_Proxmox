@@ -375,11 +375,53 @@ def create_cluster(
             f"Il nodo primario '{primary.name}' appartiene già a un cluster Proxmox. "
             "Apri o aggiorna quel cluster invece di crearne uno nuovo dallo stesso nodo.",
         )
+
+    # Auto-cleanup + retry: if pvecm create failed because a stale corosync.conf
+    # already exists (left by a previous partial create that timed out), remove
+    # the file and try once more.  This lets the user hit "Nuovo cluster" a second
+    # time without having to manually SSH in and delete the file.
+    if exit_code != 0 and (
+        "already exists" in combined or "corosync.conf" in combined
+    ):
+        try:
+            # /etc/pve/ is a FUSE fs managed by pve-cluster — plain `rm` is
+            # denied even as root while the service is running.  We must stop
+            # pve-cluster, remount pmxcfs in local mode, delete, then restart.
+            for cleanup_cmd in [
+                "systemctl stop pve-cluster 2>/dev/null; true",
+                "systemctl stop corosync 2>/dev/null; true",
+                "pmxcfs -l >/dev/null 2>&1 &",
+                "sleep 2",
+                "rm -f /etc/pve/corosync.conf 2>/dev/null; true",
+                "rm -f /etc/corosync/authkey 2>/dev/null; true",
+                "killall pmxcfs 2>/dev/null; true",
+                "systemctl start pve-cluster 2>/dev/null; true",
+                "sleep 2",
+            ]:
+                _, cs, ce = client.exec_command(cleanup_cmd, timeout=30)
+                cs.read(); ce.read()
+
+            retry_cmd = (
+                f"pvecm create {shlex.quote(cluster_name)} --link0 {shlex.quote(link0)}"
+            )
+            _, rs, re_ = client.exec_command(retry_cmd, timeout=120)
+            r_out  = rs.read().decode("utf-8", errors="replace").strip()
+            r_err  = re_.read().decode("utf-8", errors="replace").strip()
+            exit_code = rs.channel.recv_exit_status()
+            combined  = "\n".join(p for p in (r_out, r_err) if p).strip()
+        except Exception as exc:
+            client.close()
+            raise HTTPException(
+                400,
+                f"Pulizia corosync.conf fallita su {primary.host}: {exc}\n"
+                "Rimuovi manualmente /etc/pve/corosync.conf sul nodo e riprova.",
+            )
+
     if exit_code != 0:
         client.close()
         raise HTTPException(400, f"Creazione cluster fallita.\n{combined}".strip())
 
-    # FIX: wait for corosync to fully initialise before returning.
+    # Wait for corosync to fully initialise before returning.
     # `pvecm create` can exit 0 before corosync has written a valid nodelist
     # to corosync.conf; a join attempt arriving seconds later would then see
     # "invalid corosync.conf ! no nodes found" on the master side.
@@ -426,6 +468,16 @@ def _ssh_cleanup_corosync(cred: "ProxmoxCredential") -> None:  # noqa: F821
     (invalid corosync.conf, authkey already exists, corosync already running).
     The credential must belong to root (root@pam) because only root can stop
     corosync and delete files under /etc/pve and /etc/corosync.
+
+    /etc/pve/ is a FUSE filesystem managed by pve-cluster (pmxcfs).
+    Files inside it cannot be removed with plain `rm` while pve-cluster is
+    running — even as root.  The correct procedure is:
+      1. Stop pve-cluster (unmounts the FUSE fs)
+      2. Stop corosync
+      3. Re-mount pmxcfs in local (standalone) mode so /etc/pve is writable
+      4. Delete the stale files
+      5. Kill the temporary pmxcfs process
+      6. Restart pve-cluster normally
     """
     import paramiko
 
@@ -437,9 +489,14 @@ def _ssh_cleanup_corosync(cred: "ProxmoxCredential") -> None:  # noqa: F821
         password=password, timeout=20, banner_timeout=20,
     )
     cmds = [
+        "systemctl stop pve-cluster 2>/dev/null; true",
         "systemctl stop corosync 2>/dev/null; true",
+        "pmxcfs -l >/dev/null 2>&1 &",
+        "sleep 2",
         "rm -f /etc/pve/corosync.conf 2>/dev/null; true",
         "rm -f /etc/corosync/authkey 2>/dev/null; true",
+        "killall pmxcfs 2>/dev/null; true",
+        "systemctl start pve-cluster 2>/dev/null; true",
     ]
     for cmd in cmds:
         _, stdout, stderr = client.exec_command(cmd, timeout=20)
