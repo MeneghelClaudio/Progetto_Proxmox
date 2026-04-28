@@ -215,6 +215,9 @@ class CreateCTIn(BaseModel):
 class ClusterCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     primary_cred_id: int
+    # link0_address: IP/hostname usato da corosync sul nodo primario.
+    # Se omesso, viene usato automaticamente l'host salvato nella credenziale.
+    link0_address: Optional[str] = None
     node_cred_ids: list[int] = []
 
 

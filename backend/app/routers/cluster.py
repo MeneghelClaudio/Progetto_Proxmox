@@ -22,6 +22,7 @@ Performance notes
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+import shlex
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -34,7 +35,7 @@ from ..crypto import decrypt_password
 from ..proxmox_client import (
     build_client, cluster_resources, cluster_status,
     node_status, node_rrddata,
-    get_tls_fingerprint, wait_for_task, upid_node,
+    get_tls_fingerprint, wait_for_task, upid_node, invalidate_client,
 )
 from ..state import (
     get_cached_tree, get_stale_tree,
@@ -312,19 +313,73 @@ def create_cluster(
     user: User    = Depends(require_senior),
 ):
     primary = _get_cred(db, user, payload.primary_cred_id)
-    nodes_ok = []
-    for nid in payload.node_cred_ids:
-        c = db.query(ProxmoxCredential).filter(
-            ProxmoxCredential.id == nid,
-            ProxmoxCredential.user_id == user.id,
-        ).first()
-        if c:
-            nodes_ok.append({"id": c.id, "name": c.name, "host": c.host})
+    if primary.pve_username != "root" or primary.pve_realm != "pam":
+        raise HTTPException(
+            400,
+            f"La creazione del cluster richiede le credenziali root@pam del nodo primario, "
+            f"ma la credenziale salvata usa '{primary.pve_username}@{primary.pve_realm}'.",
+        )
+
+    import paramiko
+
+    try:
+        password = decrypt_password(primary.encrypted_password)
+    except Exception as e:
+        raise HTTPException(500, f"Errore decifratura credenziali del nodo primario: {e}")
+
+    link0 = (payload.link0_address or primary.host or "").strip()
+    cluster_name = (payload.name or "").strip()
+    if not cluster_name:
+        raise HTTPException(400, "Il nome del cluster è obbligatorio.")
+    if not link0:
+        raise HTTPException(400, "L'indirizzo corosync del nodo primario è obbligatorio.")
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            hostname=primary.host, port=22, username="root",
+            password=password, timeout=30, banner_timeout=30,
+        )
+        # A local-only cluster created from the UI is not enough: the primary
+        # node must run `pvecm create` so the following join has a valid
+        # corosync configuration and nodelist.
+        create_cmd = (
+            f"pvecm status >/dev/null 2>&1 && "
+            f"echo '__PMX_CLUSTER_ALREADY_EXISTS__' || "
+            f"pvecm create {shlex.quote(cluster_name)} --link0 {shlex.quote(link0)}"
+        )
+        _, stdout, stderr = client.exec_command(create_cmd, timeout=120)
+        out = stdout.read().decode("utf-8", errors="replace").strip()
+        err = stderr.read().decode("utf-8", errors="replace").strip()
+        exit_code = stdout.channel.recv_exit_status()
+    except Exception as exc:
+        raise HTTPException(
+            400,
+            f"Creazione cluster fallita sul nodo primario {primary.host}: {type(exc).__name__}: {exc}",
+        )
+    finally:
+        client.close()
+
+    combined = "\n".join(part for part in (out, err) if part).strip()
+    if "__PMX_CLUSTER_ALREADY_EXISTS__" in combined:
+        raise HTTPException(
+            400,
+            f"Il nodo primario '{primary.name}' appartiene già a un cluster Proxmox. "
+            "Apri o aggiorna quel cluster invece di crearne uno nuovo dallo stesso nodo.",
+        )
+    if exit_code != 0:
+        raise HTTPException(400, f"Creazione cluster fallita.\n{combined}".strip())
+
+    invalidate_client(primary.id)
+
     return {
-        "name":    payload.name,
+        "name":    cluster_name,
         "primary": {"id": primary.id, "name": primary.name, "host": primary.host},
-        "nodes":   nodes_ok,
+        "nodes":   [],
         "status":  "ok",
+        "link0":   link0,
+        "output":  combined,
     }
 
 
@@ -394,6 +449,24 @@ def cluster_join(
     """
     joining = _get_cred(db, user, payload.node_cred_id)
     master  = _get_cred(db, user, cred_id)
+    mpx = build_client(master)
+
+    try:
+        join_info = mpx.cluster.config.join.get()
+    except Exception as exc:
+        raise HTTPException(
+            400,
+            "Il nodo master non ha ancora un cluster Proxmox valido. "
+            "Crea prima il cluster reale sul nodo primario, poi riprova il join. "
+            f"(dettaglio API: {type(exc).__name__}: {exc})",
+        )
+
+    if not (join_info.get("nodelist") or []):
+        raise HTTPException(
+            400,
+            "Il nodo master non ha ancora una configurazione corosync valida "
+            "(nodelist vuota). Crea prima il cluster reale sul nodo primario, poi riprova il join.",
+        )
 
     # ── 1. Get fingerprint ───────────────────────────────────────────────────
     fingerprint: str | None = None
@@ -408,16 +481,13 @@ def cluster_join(
     # Strategy B: GET /cluster/config/join (can fail if node DNS is broken)
     if not fingerprint:
         try:
-            mpx  = build_client(master)
-            info = mpx.cluster.config.join.get()
-            fingerprint = (info.get("nodelist") or [{}])[0].get("pve_fp")
+            fingerprint = (join_info.get("nodelist") or [{}])[0].get("pve_fp")
         except Exception:
             pass
 
     # Strategy C: node certificates API
     if not fingerprint:
         try:
-            mpx        = build_client(master)
             nodes_list = mpx.nodes.get()
             node_name  = nodes_list[0]["node"] if nodes_list else None
             if node_name:
@@ -470,8 +540,6 @@ def cluster_join(
     link0 = payload.link0_address or joining.host
 
     # ── 3. Helper: attempt one join and return the polled result ─────────────
-    from ..proxmox_client import invalidate_client
-
     def _attempt_join() -> tuple[str, dict | None]:
         """Build a fresh client and post the join. Returns (upid, task_result)."""
         invalidate_client(joining.id)
