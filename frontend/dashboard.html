@@ -224,7 +224,7 @@ function renderOverview() {
     { icon:'dns',           color:'var(--accent)',  bg:'var(--accent-dim)',  val: ALL_SRV.length,   lbl:'Server Proxmox',    sub:`${onlineSrv} online` },
     { icon:'storage',       color:'var(--info)',    bg:'var(--info-dim)',    val: d.nodes.length,   lbl:'Nodi Fisici',       sub:`${nodesUp} online` },
     { icon:'computer',      color:'var(--accent)',  bg:'var(--accent-dim)',  val: totalVMs,         lbl:'Macchine Virtuali', sub:`${d.vms.filter(v=>v.type==='vm'&&v.status==='running').length} running` },
-    { icon:'deployed_code', color:'#5dd05d',        bg:'#0c2e0c',            val: totalCTs,         lbl:'Container',         sub:`${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
+    { icon:'deployed_code', color:'var(--success)', bg:'var(--success-dim)', val: totalCTs,         lbl:'Container',         sub:`${d.vms.filter(v=>v.type==='ct'&&v.status==='running').length} running` },
     { icon:'backup',        color:'var(--success)', bg:'var(--success-dim)', val: d.backupServers.length, lbl:'Backup Target', sub: d.backupServers.length ? 'configurati' : 'nessuno' },
   ];
   document.getElementById('overview-grid').innerHTML = cards.map(c => `
