@@ -324,7 +324,8 @@ def get_node_rrd(
 
 @router.post("", status_code=201)
 def create_cluster(
-    payload: ClusterCreateIn,
+    payload:          ClusterCreateIn,
+    background_tasks: BackgroundTasks,
     db:   Session = Depends(get_db),
     user: User    = Depends(require_senior),
 ):
@@ -466,6 +467,11 @@ def create_cluster(
 
     invalidate_client(primary.id)
 
+    # ── Schedule automatic Ceph setup in the background ──────────────────────
+    # Run after the HTTP response is sent so the cluster creation call returns
+    # instantly without waiting for the (potentially multi-minute) Ceph install.
+    background_tasks.add_task(_bg_ceph_setup, primary.id, user.id, True)
+
     return {
         "name":    cluster_name,
         "primary": {"id": primary.id, "name": primary.name, "host": primary.host},
@@ -474,6 +480,187 @@ def create_cluster(
         "link0":   link0,
         "output":  combined,
     }
+
+
+import logging as _logging
+_ceph_log = _logging.getLogger(__name__ + ".ceph")
+
+
+def _ssh_exec(client, cmd: str, timeout: int = 300) -> tuple[int, str, str]:
+    """Run a command over an open paramiko SSH connection and return (rc, stdout, stderr)."""
+    _, stdout, stderr = client.exec_command(cmd, timeout=timeout)
+    out  = stdout.read().decode("utf-8", errors="replace").strip()
+    err  = stderr.read().decode("utf-8", errors="replace").strip()
+    code = stdout.channel.recv_exit_status()
+    return code, out, err
+
+
+def _ssh_setup_ceph(client, host: str, is_primary: bool) -> None:
+    """
+    Install and configure Ceph on a Proxmox node via an already-open SSH connection.
+
+    is_primary=True  → full setup: install + init + mon + mgr + OSD + pool
+    is_primary=False → joining node: install + mon + mgr + OSD (init/pool on primary)
+
+    OSD disk selection
+    ──────────────────
+    We pick the first disk that:
+      • is not the OS boot disk
+      • has no partitions (completely blank)
+    If no such disk is found we skip OSD creation (the cluster still works, just
+    without local OSD on that node — operators can add OSDs manually later).
+
+    All errors are logged but never raised — Ceph setup failure must not break
+    the cluster creation/join that already succeeded.
+    """
+    def run(cmd, timeout=300):
+        rc, out, err = _ssh_exec(client, cmd, timeout)
+        _ceph_log.debug("[%s] rc=%d cmd=%r out=%r err=%r", host, rc, cmd[:80], out[:200], err[:200])
+        return rc, out, err
+
+    try:
+        # ── 0. Fix apt sources: disable enterprise repo (needs paid key) ─────
+        # Fresh Proxmox installs ship with enterprise.proxmox.com enabled.
+        # Without a valid subscription key it returns 401, breaking apt-get
+        # update and therefore pveceph install.  We comment it out and add the
+        # no-subscription community repo instead, then update the package lists.
+        _ceph_log.info("[%s] Configuring apt: disabling enterprise repo, enabling no-subscription…", host)
+        run(
+            r"""
+set -e
+# Detect distro codename (bookworm / trixie / …)
+CODENAME=$(. /etc/os-release 2>/dev/null && echo "$VERSION_CODENAME")
+[ -z "$CODENAME" ] && CODENAME=$(lsb_release -sc 2>/dev/null || echo "bookworm")
+
+# Disable enterprise PVE repo (comment out all non-comment lines)
+ENT=/etc/apt/sources.list.d/pve-enterprise.list
+if [ -f "$ENT" ]; then
+    sed -i 's|^deb |# deb |g' "$ENT"
+fi
+
+# Disable enterprise Ceph repo if present
+CENT=/etc/apt/sources.list.d/ceph.list
+if [ -f "$CENT" ]; then
+    sed -i 's|^deb https://enterprise\.proxmox\.com|# deb https://enterprise.proxmox.com|g' "$CENT"
+fi
+
+# Add no-subscription PVE repo if not already present
+NOSUB=/etc/apt/sources.list.d/pve-no-subscription.list
+if ! grep -qs 'pve-no-subscription' "$NOSUB" 2>/dev/null; then
+    echo "deb http://download.proxmox.com/debian/pve $CODENAME pve-no-subscription" > "$NOSUB"
+fi
+""",
+            timeout=15,
+        )
+        run("apt-get update -qq 2>&1 | grep -v '^Hit' | head -20 || true", timeout=120)
+
+        # ── 1. Install Ceph packages ─────────────────────────────────────────
+        # PVE 8.x ships Reef; PVE 9.x ships Squid. Detect from pveversion.
+        _, pve_ver_out, _ = run("pveversion --verbose 2>/dev/null | grep pve-manager | head -1", timeout=10)
+        pve_major = 9  # safe default
+        try:
+            pve_major = int(pve_ver_out.strip().split("/")[1].split(".")[0])
+        except Exception:
+            pass
+        ceph_version = "squid" if pve_major >= 9 else "reef"
+
+        _ceph_log.info("[%s] PVE major=%d — installing Ceph %s (no-subscription)…", host, pve_major, ceph_version)
+        rc, out, err = run(
+            f"pveceph install --version {ceph_version} --repository no-subscription",
+            timeout=900,  # installation can take 5-10 min on slow mirrors
+        )
+        if rc != 0:
+            _ceph_log.warning("[%s] pveceph install exited %d: %s", host, rc, err[:300])
+
+        if is_primary:
+            # ── 2. Detect cluster network (first non-default, non-link-local) ─
+            _, net_out, _ = run(
+                "ip -4 route | grep -v default | awk '{print $1}'"
+                " | grep '/' | grep -v '^169\\.' | head -1",
+                timeout=10,
+            )
+            network = net_out.strip() or "10.0.0.0/8"
+
+            # ── 3. Init Ceph (idempotent: skip if already initialised) ────────
+            _ceph_log.info("[%s] Initialising Ceph on network %s…", host, network)
+            run(
+                f"pveceph status 2>/dev/null | grep -q 'health' || "
+                f"pveceph init --network {shlex.quote(network)}",
+                timeout=60,
+            )
+
+        # ── 4. Create monitor ────────────────────────────────────────────────
+        _ceph_log.info("[%s] Creating Ceph monitor…", host)
+        run("pveceph createmon 2>/dev/null; true", timeout=60)
+
+        # ── 5. Create manager ────────────────────────────────────────────────
+        _ceph_log.info("[%s] Creating Ceph manager…", host)
+        run("pveceph createmgr 2>/dev/null; true", timeout=60)
+
+        # ── 6. Find first blank disk for OSD ─────────────────────────────────
+        _, disk_out, _ = run(
+            r"""
+BOOT=$(lsblk -n -o PKNAME $(findmnt -n -o SOURCE / 2>/dev/null) 2>/dev/null | head -1)
+for DEV in $(lsblk -n -d -o NAME,TYPE 2>/dev/null | awk '$2=="disk"{print $1}'); do
+    [ "$DEV" = "$BOOT" ] && continue
+    PARTS=$(lsblk -n -o NAME /dev/$DEV 2>/dev/null | wc -l)
+    [ "$PARTS" -le 1 ] && echo "/dev/$DEV" && break
+done
+""",
+            timeout=15,
+        )
+        disk = disk_out.strip()
+        if disk and disk.startswith("/dev/"):
+            _ceph_log.info("[%s] Creating OSD on %s…", host, disk)
+            run(f"pveceph createosd {shlex.quote(disk)} 2>/dev/null; true", timeout=180)
+        else:
+            _ceph_log.warning("[%s] No blank disk found for Ceph OSD — skipping OSD creation.", host)
+
+        if is_primary:
+            # ── 7. Wait for OSD to come up, then create pool + storage ────────
+            run("sleep 15", timeout=20)
+            _ceph_log.info("[%s] Creating Ceph pool 'ceph-pool'…", host)
+            run(
+                "pveceph pool create ceph-pool --pg_num 128 --add_storages 1 2>/dev/null; true",
+                timeout=120,
+            )
+
+        _ceph_log.info("[%s] Ceph setup done (is_primary=%s).", host, is_primary)
+
+    except Exception as exc:
+        _ceph_log.error("[%s] Ceph setup failed: %s", host, exc)
+        # Never propagate — cluster join/create must not be invalidated by Ceph errors.
+
+
+def _bg_ceph_setup(cred_id: int, user_id: int, is_primary: bool) -> None:
+    """
+    Background task: open a fresh SSH connection to the node and run Ceph setup.
+    Uses its own DB session so it can be scheduled as a FastAPI BackgroundTask.
+    """
+    import paramiko
+    from ..database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        from ..models import ProxmoxCredential
+        cred = db.query(ProxmoxCredential).get(cred_id)
+        if not cred:
+            return
+        password = decrypt_password(cred.encrypted_password)
+        client   = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            hostname=cred.host, port=22, username="root",
+            password=password, timeout=30, banner_timeout=30,
+        )
+        try:
+            _ssh_setup_ceph(client, cred.host, is_primary=is_primary)
+        finally:
+            client.close()
+    except Exception as exc:
+        _ceph_log.error("bg_ceph_setup failed for cred_id=%s: %s", cred_id, exc)
+    finally:
+        db.close()
 
 
 def _ssh_cleanup_corosync(cred: "ProxmoxCredential") -> None:  # noqa: F821
@@ -545,6 +732,7 @@ _COROSYNC_ERRORS = _JOINING_COROSYNC_ERRORS + _MASTER_COROSYNC_ERRORS
 @router.post("/{cred_id}/cluster/join")
 def cluster_join(
     cred_id: int, payload: ClusterJoinIn,
+    background_tasks: BackgroundTasks,
     db:   Session = Depends(get_db),
     user: User    = Depends(require_senior),
 ):
@@ -748,6 +936,17 @@ def cluster_join(
             400,
             f"Join task fallito ({exitstatus}).\n{log_snippet}".strip(),
         )
+
+    # ── Schedule automatic Ceph setup in the background ──────────────────────
+    # Both the master node and the joining node need Ceph installed/configured.
+    # We schedule two background tasks — one for each — so the HTTP response
+    # returns immediately without blocking on the (potentially lengthy) install.
+    #
+    # master (is_primary=True):  ensures the primary has init + pool created.
+    # joining (is_primary=False): installs packages + mon + mgr + OSD only;
+    #                             init and pool creation happen on the primary.
+    background_tasks.add_task(_bg_ceph_setup, master.id,  user.id, True)
+    background_tasks.add_task(_bg_ceph_setup, joining.id, user.id, False)
 
     return {
         "upid":        upid,

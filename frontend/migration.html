@@ -112,9 +112,9 @@
   </main>
 </div>
 
-<script src="api.js"></script>
-<script src="shared.js"></script>
-<script src="sidebar.js"></script>
+<script src="api.js?v=3"></script>
+<script src="shared.js?v=3"></script>
+<script src="sidebar.js?v=3"></script>
 <script>
 const session = requireAuth();
 if (!can(session, 'migration')) {
@@ -323,7 +323,8 @@ async function startTaskPolling() {
             success ? 'success' : 'error'
           );
           if (!success) {
-            showErrorModal(`Migrazione fallita: ${vm?.name || vmid}`, task.message || 'Errore sconosciuto', task.message);
+            // Fetch the full Proxmox task log for a detailed error view
+            showMigrationError(task.id, vm?.name || vmid, task.message || 'Errore sconosciuto');
           }
           clearMigrationHighlight(vmid, info.targetNode);
           migratingVMs.delete(vmid);
@@ -363,6 +364,10 @@ function renderTasks(tasks) {
           <div class="task-progress"><div class="task-progress-fill" style="width:${t.progress || 0}%"></div></div>
           <div class="text-xs text-muted" style="margin-top:4px">${escapeHtml(parseMigrateLog(t.message || t.status || ''))}</div>
         </div>
+        <button class="btn btn-sm" style="flex-shrink:0;background:var(--danger-dim,rgba(239,68,68,.12));color:var(--danger);border-color:var(--danger);margin-left:8px"
+          onclick="stopTask('${t.id}')" title="Annulla migrazione">
+          <span class="material-symbols-rounded" style="font-size:16px">stop_circle</span>
+        </button>
       </div>`).join('')}
     ${done.map(t => `
       <div class="task-bar">
@@ -383,6 +388,27 @@ function renderTasks(tasks) {
 
 async function dismissTask(id) {
   try { await tasksApi.dismiss(id); } catch {}
+}
+
+async function stopTask(id) {
+  if (!confirm('Vuoi annullare questa migrazione?')) return;
+  try {
+    await tasksApi.stop(id);
+    addLog('Migrazione annullata dall\'utente', 'error');
+    showToast('Migrazione annullata', 'warning');
+  } catch (e) {
+    showToast(`Errore durante l'annullamento: ${e.message}`, 'danger');
+  }
+}
+
+async function showMigrationError(taskId, vmName, shortMsg) {
+  // Show immediately with what we have, then enrich with full log
+  showErrorModal(`Migrazione fallita: ${vmName}`, shortMsg, null);
+  try {
+    const data = await tasksApi.log(taskId);
+    const fullLog = (data.lines || []).join('\n').trim();
+    if (fullLog) showErrorModal(`Migrazione fallita: ${vmName}`, shortMsg, fullLog);
+  } catch (_) { /* keep the basic modal */ }
 }
 
 async function reloadAll() {

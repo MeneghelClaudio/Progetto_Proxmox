@@ -28,8 +28,31 @@ _client_lock = threading.Lock()
 CLIENT_TTL = 270.0  # seconds (Proxmox tickets last 2 h; we refresh well before)
 
 
-def build_client(cred: ProxmoxCredential) -> ProxmoxAPI:
-    """Return a cached (or freshly-created) ProxmoxAPI client."""
+def build_client(cred: ProxmoxCredential,
+                 timeout: Optional[float] = None) -> ProxmoxAPI:
+    """Return a cached (or freshly-created) ProxmoxAPI client.
+
+    timeout=None  → use the shared cached client (8 s socket timeout, fine for
+                    normal API calls; re-used across requests to avoid the auth
+                    round-trip on every call).
+    timeout=<n>   → create a *fresh*, non-cached client with that socket
+                    timeout (seconds).  Use this for long-running operations
+                    such as large-file uploads where 8 s is far too short.
+    """
+    if timeout is not None:
+        # Non-cached client — each call authenticates fresh, caller owns it.
+        if not cred.verify_ssl:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        password = decrypt_password(cred.encrypted_password)
+        return ProxmoxAPI(
+            host=f"{cred.host}:{cred.port}",
+            user=f"{cred.pve_username}@{cred.pve_realm}",
+            password=password,
+            verify_ssl=cred.verify_ssl,
+            timeout=timeout,
+        )
+
+    # ── Normal cached path ────────────────────────────────────────────────────
     now = time.monotonic()
     with _client_lock:
         entry = _client_cache.get(cred.id)
@@ -293,6 +316,28 @@ def get_tls_fingerprint(host: str, port: int = 8006, timeout: int = 10) -> str:
             cert_der = ssock.getpeercert(binary_form=True)
     digest = hashlib.sha256(cert_der).hexdigest()
     return ":".join(digest[i : i + 2].upper() for i in range(0, len(digest), 2))
+
+
+# ---------- HA resource helpers ----------
+
+def ha_resource_get(px: ProxmoxAPI, kind: str, vmid: int) -> Optional[dict]:
+    """
+    Return the HA resource config for a VM/CT, or None if not HA-managed.
+    kind: 'qemu' → sid prefix 'vm', 'lxc' → 'ct'.
+    """
+    prefix = "vm" if kind == "qemu" else "ct"
+    sid    = f"{prefix}:{vmid}"
+    try:
+        return px.cluster.ha.resources(sid).get()
+    except Exception:
+        return None
+
+
+def ha_resource_set_state(px: ProxmoxAPI, kind: str, vmid: int, state: str) -> None:
+    """Set the HA resource management state (started / stopped / ignored / disabled)."""
+    prefix = "vm" if kind == "qemu" else "ct"
+    sid    = f"{prefix}:{vmid}"
+    px.cluster.ha.resources(sid).put(state=state)
 
 
 # ---------- Resource discovery (for create forms) ----------

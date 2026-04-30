@@ -204,7 +204,9 @@ const backupApi = {
 
 const tasksApi = {
   list:    (active = false)  => apiRequest(`/api/tasks${active ? '?active=true' : ''}`),
+  log:     (id)              => apiRequest(`/api/tasks/${id}/log`),
   dismiss: (id)              => apiRequest(`/api/tasks/${id}`, { method: 'DELETE' }),
+  stop:    (id)              => apiRequest(`/api/tasks/${id}/stop`, { method: 'POST' }),
 };
 
 // ---------- ISO / Storage content API ----------
@@ -213,6 +215,9 @@ const isoApi = {
   // Lista i file ISO/template disponibili su uno storage di un nodo
   list: (credId, node, storage, type = 'iso') =>
     apiRequest(`/api/clusters/${credId}/nodes/${node}/storage/${storage}/content?content=${type}`),
+  // Elimina un file dallo storage (ISO, template…)
+  delete: (credId, node, storage, volid) =>
+    apiRequest(`/api/clusters/${credId}/nodes/${node}/storage/${storage}/content?volid=${encodeURIComponent(volid)}`, { method: 'DELETE' }),
   // Upload ISO: usa FormData (multipart)
   upload: (credId, node, storage, file, onProgress) => {
     return new Promise((resolve, reject) => {
@@ -221,7 +226,17 @@ const isoApi = {
       xhr.open('POST', `${API_BASE}/api/clusters/${credId}/nodes/${node}/storage/${storage}/upload`);
       if (token) xhr.setRequestHeader('Authorization', 'Bearer ' + token);
       xhr.upload.addEventListener('progress', e => {
-        if (e.lengthComputable && onProgress) onProgress(Math.round(e.loaded / e.total * 100));
+        if (e.lengthComputable && onProgress) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          onProgress(pct);
+        }
+      });
+      // loadend fires when ALL bytes have been sent to the backend (even if the
+      // last 'progress' event didn't reach 100%).  From this point the backend
+      // is forwarding the file to Proxmox — which can take several minutes for
+      // large ISOs.  Signal phase-2 so the UI switches to indeterminate mode.
+      xhr.upload.addEventListener('loadend', () => {
+        if (onProgress) onProgress(100);
       });
       xhr.addEventListener('load', () => {
         if (xhr.status >= 200 && xhr.status < 300) {

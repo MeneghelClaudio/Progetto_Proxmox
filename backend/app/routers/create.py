@@ -9,15 +9,25 @@ Role gates:
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import shutil
 import tempfile
+from functools import partial
+
+import requests as _requests
+import urllib3 as _urllib3
+from requests_toolbelt import MultipartEncoder
+
+_upload_log = logging.getLogger(__name__ + ".upload")
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..auth import get_current_user, require_senior
+from ..crypto import decrypt_password as _decrypt_password
 from ..models import User, ProxmoxCredential
 from ..schemas import CreateVMIn, CreateCTIn
 from ..proxmox_client import (
@@ -125,6 +135,37 @@ def storage_content(cred_id: int, node: str, storage: str, content: str = "iso,v
     return out
 
 
+# ---------- Storage content delete (ISO / template removal) ----------
+
+@router.delete("/storage/{storage}/content", status_code=200)
+def delete_storage_content(
+    cred_id: int, node: str, storage: str,
+    volid: str,
+    db: Session = Depends(get_db),
+    user: User  = Depends(require_senior),
+):
+    """
+    Delete a file from Proxmox storage (ISO image, LXC template, etc.).
+
+    `volid` is the full Proxmox volume identifier as returned by the content
+    list, e.g. ``local:iso/virtio-win-0.1.285.iso``.  The ``storage:`` prefix
+    is stripped automatically before calling the API, since the storage name
+    is already part of the URL path.
+    """
+    cred = _get_cred(db, user, cred_id)
+    px   = build_client(cred)
+
+    # Strip "storage:" prefix — Proxmox content API uses the path portion only
+    volume = volid.split(":", 1)[1] if ":" in volid else volid
+
+    try:
+        px.nodes(node).storage(storage).content(volume).delete()
+    except Exception as e:
+        raise HTTPException(400, f"Errore eliminazione: {_proxmox_error(e)}")
+
+    return {"deleted": True, "volid": volid}
+
+
 # ---------- Storage upload (ISO / vztmpl) ----------
 
 @router.post("/storage/{storage}/upload", status_code=201)
@@ -136,14 +177,17 @@ async def storage_upload(cred_id: int, node: str, storage: str,
     """
     Upload a file (ISO / disk image / LXC template) to a Proxmox storage.
 
-    Streams the upload to a temp file, then forwards it to the Proxmox
-    storage API using proxmoxer's multipart upload helper.
+    Strategy
+    ────────
+    1. Stream incoming multipart to a real temp file on disk (more reliable than
+       seeking the SpooledTemporaryFile, which has edge-cases on large files).
+    2. Forward to Proxmox via requests + MultipartEncoder in a thread-pool
+       executor so the asyncio event loop is never blocked during the transfer.
+       This completely bypasses proxmoxer's hardcoded 2 GiB limit.
     """
     cred = _get_cred(db, user, cred_id)
-    px = build_client(cred)
 
     name = filename or file.filename or "upload.bin"
-    # Heuristic content type based on extension
     lower = name.lower()
     if lower.endswith((".iso", ".img")):
         content_type = "iso"
@@ -154,20 +198,25 @@ async def storage_upload(cred_id: int, node: str, storage: str,
     else:
         content_type = "iso"
 
-    tmp_dir = tempfile.mkdtemp(prefix="pmx_up_")
+    tmp_dir  = tempfile.mkdtemp(prefix="pmx_up_")
     tmp_path = os.path.join(tmp_dir, name)
     try:
+        # ── 1. Write incoming bytes to a real temp file (non-blocking chunks) ─
         with open(tmp_path, "wb") as fp:
-            shutil.copyfileobj(file.file, fp, length=1024 * 1024)
+            shutil.copyfileobj(file.file, fp, length=4 * 1024 * 1024)
 
+        # ── 2. Forward to Proxmox in a thread-pool (non-blocking) ────────────
+        loop = asyncio.get_event_loop()
         try:
-            with open(tmp_path, "rb") as fp:
-                upid = px.nodes(node).storage(storage).upload.post(
-                    content=content_type,
-                    filename=fp,
-                )
+            upid = await loop.run_in_executor(
+                None,
+                partial(_stream_upload_to_proxmox,
+                        cred=cred, node=node, storage=storage,
+                        content_type=content_type,
+                        file_path=tmp_path, file_name=name),
+            )
         except Exception as e:
-            raise HTTPException(400, f"Upload failed: {_proxmox_error(e)}")
+            raise HTTPException(400, f"Upload failed: {e}")
 
         return {"upid": upid, "name": name, "content": content_type, "storage": storage}
     finally:
@@ -176,6 +225,84 @@ async def storage_upload(cred_id: int, node: str, storage: str,
             os.rmdir(tmp_dir)
         except Exception:
             pass
+
+
+def _stream_upload_to_proxmox(*, cred, node: str, storage: str,
+                               content_type: str, file_path: str,
+                               file_name: str) -> str:
+    """
+    Upload a file to Proxmox storage using requests + MultipartEncoder.
+
+    Reads from a real file on disk (file_path).  Completely bypasses proxmoxer
+    so there is no 2 GiB size limit.  MultipartEncoder streams in chunks; the
+    full file is never loaded into memory.  Returns the Proxmox task UPID.
+
+    Timeouts:
+      connect: 30 s
+      read (response after upload finishes): 1800 s (30 min)
+    The upload send time itself is not limited — it depends on network speed.
+    """
+    if not cred.verify_ssl:
+        _urllib3.disable_warnings(_urllib3.exceptions.InsecureRequestWarning)
+
+    password = _decrypt_password(cred.encrypted_password)
+    base     = f"https://{cred.host}:{cred.port}/api2/json"
+    sess     = _requests.Session()
+    sess.verify = cred.verify_ssl
+
+    # ── Authenticate ──────────────────────────────────────────────────────────
+    r = sess.post(
+        f"{base}/access/ticket",
+        data={
+            "username": f"{cred.pve_username}@{cred.pve_realm}",
+            "password": password,
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    d      = r.json()["data"]
+    ticket = d["ticket"]
+    csrf   = d["CSRFPreventionToken"]
+
+    # ── Stream file to Proxmox ────────────────────────────────────────────────
+    file_size = os.path.getsize(file_path)
+    _upload_log.info(
+        "Starting Proxmox upload: node=%s storage=%s file=%s size=%d content=%s",
+        node, storage, file_name, file_size, content_type,
+    )
+    url = f"{base}/nodes/{node}/storage/{storage}/upload"
+    with open(file_path, "rb") as fp:
+        encoder = MultipartEncoder(fields={
+            "content":  content_type,
+            "filename": (file_name, fp, "application/octet-stream"),
+        })
+        r = sess.post(
+            url,
+            headers={
+                "Cookie":              f"PVEAuthCookie={ticket}",
+                "CSRFPreventionToken": csrf,
+                "Content-Type":        encoder.content_type,
+            },
+            data=encoder,
+            # connect_timeout=30s, response_timeout=1800s (30 min max wait)
+            timeout=(30, 1800),
+        )
+
+    _upload_log.info(
+        "Proxmox upload response: status=%d body=%s",
+        r.status_code, r.text[:500],
+    )
+
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("errors") or r.json().get("message") or r.text
+        except Exception:
+            detail = r.text
+        raise RuntimeError(detail or f"HTTP {r.status_code}")
+
+    upid = r.json().get("data", "")
+    _upload_log.info("Proxmox upload accepted, UPID=%s", upid)
+    return upid
 
 
 # ---------- Create VM (senior+) ----------

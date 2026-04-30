@@ -199,6 +199,10 @@ function stopRevisionPolling() {
   if (_revisionTimer) { clearInterval(_revisionTimer); _revisionTimer = null; }
 }
 
+function stopTaskPolling() {
+  if (TASKS_POLL_TIMER) { clearTimeout(TASKS_POLL_TIMER); TASKS_POLL_TIMER = null; }
+}
+
 async function refreshClusterData() {
   const credId = getActiveCred();
   if (!credId) { CLUSTER_DATA = null; CLUSTER_RAW = null; return null; }
@@ -353,8 +357,16 @@ function ensureTasksPanel() {
     </div>`;
   document.body.appendChild(el);
   loadTasks(false);
-  // Auto-poll every 5s when running tasks exist (otherwise every 30s)
-  TASKS_POLL_TIMER = setInterval(() => loadTasks(false), 5000);
+  // Adaptive polling: 4s when running tasks exist, 30s when all done
+  function _scheduleTaskPoll() {
+    const hasRunning = !!document.querySelector('.pmx-tasks-badge:not(.hidden)');
+    const delay = hasRunning ? 4000 : 30000;
+    TASKS_POLL_TIMER = setTimeout(async () => {
+      await loadTasks(false);
+      _scheduleTaskPoll();
+    }, delay);
+  }
+  _scheduleTaskPoll();
 }
 
 function toggleTasksPanel() {

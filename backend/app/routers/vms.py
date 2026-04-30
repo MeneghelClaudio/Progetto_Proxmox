@@ -163,10 +163,15 @@ def migrate(cred_id: int, kind: str, node: str, vmid: int, body: MigrateIn,
             bg: BackgroundTasks,
             db: Session = Depends(get_db), user: User = Depends(require_senior)):
     cred = _get_cred(db, user, cred_id)
-    task = start_migration(
+    task, ha_restore, cdrom_to_restore, total_bytes = start_migration(
         user_id=user.id, cred=cred, node=node, vmid=vmid, kind=_kind(kind),
         target_node=body.target_node, online=body.online,
         with_local_disks=body.with_local_disks,
     )
-    bg.add_task(poll_migration, task.id, cred.id)
+    bg.add_task(
+        poll_migration, task.id, cred.id,
+        ha_restore=ha_restore,
+        cdrom_to_restore=cdrom_to_restore,
+        total_bytes=total_bytes,
+    )
     return task
