@@ -1,16 +1,61 @@
 services:
+
+  # ── Database MySQL ────────────────────────────────────────────────────────
+  db:
+    image: mysql:8.0
+    container_name: pmx_db
+    restart: unless-stopped
+    # MySQL 8.0 usa caching_sha2_password di default → incompatibile con PyMySQL.
+    # Forziamo il plugin classico.
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE:      proxmox_manager
+      MYSQL_USER:          pmxuser
+      MYSQL_PASSWORD:      pmxpass
+    volumes:
+      - db_data:/var/lib/mysql
+    networks:
+      - pmx_net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # ── Backend FastAPI ───────────────────────────────────────────────────────
   backend:
-    image: 240595528763.dkr.ecr.eu-west-1.amazonaws.com/syam/progetto-proxmox-avengers:backend
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: pmx_backend
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
-      # ── AWS Secrets Manager ─────────────────────────────────────────────────
-      AWS_REGION:            ${AWS_REGION:-}
-      AWS_SECRET_NAME:       ${AWS_SECRET_NAME:-}
-      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # AWS Secrets Manager disabilitato — config presa direttamente da qui
+      AWS_REGION:            ""
+      AWS_SECRET_NAME:       ""
+      AWS_ACCESS_KEY_ID:     ""
+      AWS_SECRET_ACCESS_KEY: ""
 
-      # ── Non-sensitive config ────────────────────────────────────────────────
+      # Database locale (punta al servizio 'db')
+      DB_HOST:     db
+      DB_PORT:     "3306"
+      DB_NAME:     proxmox_manager
+      DB_USER:     pmxuser
+      DB_PASSWORD: pmxpass
+
+      # JWT — cambia in produzione
+      JWT_SECRET: "local-dev-jwt-secret-change-me"
+
+      # Utente admin creato al primo avvio (se il DB è vuoto)
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin
+
+      # CORS aperto in locale
       CORS_ORIGINS: "*"
     volumes:
       - backend_data:/data
@@ -18,13 +63,23 @@ services:
       - pmx_net
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 45s
 
+  # ── Frontend Nginx ────────────────────────────────────────────────────────
   frontend:
-    image: 240595528763.dkr.ecr.eu-west-1.amazonaws.com/syam/progetto-proxmox-avengers:frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: pmx_frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "8027:80"
     networks:
@@ -36,3 +91,4 @@ networks:
 
 volumes:
   backend_data:
+  db_data:

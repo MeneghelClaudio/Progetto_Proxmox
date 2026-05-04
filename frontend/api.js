@@ -36,6 +36,12 @@ function setActiveCred(id) {
 // ---------- HTTP helpers ----------
 
 async function apiRequest(path, { method = 'GET', body = null, form = false } = {}) {
+  // Demo mode: intercept before any real network call
+  if (typeof window._demoIntercept === 'function') {
+    const demoResult = window._demoIntercept(path, method);
+    if (demoResult !== null) return demoResult;
+  }
+
   const headers = {};
   const token = getToken();
   if (token) headers['Authorization'] = 'Bearer ' + token;

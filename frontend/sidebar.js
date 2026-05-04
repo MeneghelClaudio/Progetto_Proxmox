@@ -1,6 +1,36 @@
 // sidebar.js — Renders the sidebar + topbar for every app page.
 
 /**
+ * Genera l'HTML del bottone Demo Mode per la topbar.
+ * Richiede che demo-data.js sia caricato prima (definisce isDemoMode / toggleDemoMode).
+ */
+function _demoBtnHtml() {
+  if (typeof isDemoMode !== 'function') return '';
+  const active = isDemoMode();
+  const bgStyle   = active
+    ? 'background:linear-gradient(135deg,#f59e0b,#d97706);border-color:#d97706;color:#fff;'
+    : 'background:var(--surface2);border-color:var(--border);color:var(--text-muted);';
+  const hoverOver = active
+    ? "this.style.filter='brightness(1.1)'"
+    : "this.style.borderColor='#f59e0b';this.style.color='#f59e0b'";
+  const hoverOut  = active
+    ? "this.style.filter=''"
+    : "this.style.borderColor='var(--border)';this.style.color='var(--text-muted)'";
+  const label     = active ? 'DEMO&nbsp;ON' : 'DEMO';
+  const titleText = active ? 'Disattiva demo mode' : 'Attiva demo mode — dati fittizi';
+  return `<button
+    id="demo-toggle-btn"
+    title="${titleText}"
+    onclick="window.toggleDemoMode()"
+    style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;
+           border-radius:6px;cursor:pointer;font-size:11px;font-weight:800;
+           letter-spacing:.5px;border:1.5px solid;transition:all .15s;${bgStyle}"
+    onmouseover="${hoverOver}"
+    onmouseout="${hoverOut}"
+  ><span class="material-symbols-rounded" style="font-size:15px">science</span>${label}</button>`;
+}
+
+/**
  * Topbar refresh: invalida la cache server-side per tutti i server registrati,
  * poi ricarica la pagina per mostrare dati freschi (inclusa percentuale PBS).
  */
@@ -45,6 +75,7 @@ function renderTopbar(session) {
       <button class="topbar-btn" id="theme-toggle-btn" title="Cambia tema" onclick="toggleTheme()">
         <span class="material-symbols-rounded" style="font-size:20px">${(localStorage.getItem('pmx_theme') || 'dark') === 'dark' ? 'light_mode' : 'dark_mode'}</span>
       </button>
+      ${_demoBtnHtml()}
     </div>
     <div class="topbar-user" id="topbar-user" onclick="logout()" title="Logout"></div>
   `;
