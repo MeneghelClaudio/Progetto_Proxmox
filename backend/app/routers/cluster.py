@@ -394,6 +394,87 @@ def get_node_rrd(
     return node_rrddata(build_client(cred), node, timeframe=timeframe)
 
 
+@router.get("/{cred_id}/nodes/{node}/disks")
+def get_node_disks(
+    cred_id: int, node: str,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(get_current_user),
+):
+    """
+    Returns physical disks on the node plus ZFS/LVM RAID membership info.
+
+    Response shape:
+    {
+      "disks": [
+        { "name": "sda", "size": 512110190592, "used": "ZFS", "model": "...", "rpm": 0 },
+        ...
+      ],
+      "zfs_pools": [
+        { "name": "rpool", "members": ["sda", "sdb"] },
+        ...
+      ],
+      "lvm_vgs": [
+        { "name": "pve", "members": ["sdc"] },
+        ...
+      ]
+    }
+    """
+    cred = _get_cred(db, user, cred_id)
+    px   = build_client(cred)
+
+    disks: list[dict] = []
+    zfs_pools: list[dict] = []
+    lvm_vgs:   list[dict] = []
+
+    # --- Physical disk list ---
+    try:
+        raw = px.nodes(node).disks.list.get()
+        for d in (raw or []):
+            devpath = d.get("devpath", "")
+            name = devpath.replace("/dev/", "") if devpath.startswith("/dev/") else d.get("name", devpath)
+            disks.append({
+                "name":  name,
+                "size":  d.get("size", 0),
+                "used":  d.get("used", ""),   # "ZFS", "LVM", "partitions", "filesystem", ""
+                "model": d.get("model", ""),
+                "rpm":   d.get("rpm", 0),      # 0 = SSD/NVMe
+            })
+    except Exception:
+        pass
+
+    # --- ZFS pools: extract member disk names ---
+    try:
+        raw_zfs = px.nodes(node).disks.zfs.get()
+        for pool in (raw_zfs or []):
+            members: list[str] = []
+            def _collect_zfs(children):
+                for ch in (children or []):
+                    n = ch.get("name", "")
+                    # leaf nodes have no children — those are the real disk names
+                    if not ch.get("children"):
+                        members.append(n.split("/")[-1].replace("wwn-", "").split("-part")[0])
+                    else:
+                        _collect_zfs(ch.get("children", []))
+            _collect_zfs(pool.get("children", []))
+            zfs_pools.append({"name": pool.get("name", ""), "members": members})
+    except Exception:
+        pass
+
+    # --- LVM volume groups: extract PV disk names ---
+    try:
+        raw_lvm = px.nodes(node).disks.lvm.get()
+        for vg in (raw_lvm or []):
+            members = []
+            for pv in (vg.get("pvs") or []):
+                pv_name = (pv.get("name") or pv.get("pv", "")).replace("/dev/", "").split("p")[0]
+                members.append(pv_name)
+            lvm_vgs.append({"name": vg.get("vg", vg.get("name", "")), "members": members})
+    except Exception:
+        pass
+
+    return {"disks": disks, "zfs_pools": zfs_pools, "lvm_vgs": lvm_vgs}
+
+
 # ---------- Logical cluster management ----------
 
 @router.post("", status_code=201)

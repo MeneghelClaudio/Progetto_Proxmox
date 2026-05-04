@@ -12,16 +12,53 @@
   border-radius:var(--radius-lg); padding:20px;
 }
 .pbs-title { font-size:15px; font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
-.disk-row { display:flex; gap:4px; flex-wrap:wrap; margin:12px 0; }
+.disk-row { display:flex; gap:5px; flex-wrap:wrap; margin:12px 0; }
 .disk-icon {
-  width:32px; height:38px; border-radius:4px;
+  width:46px; height:62px; border-radius:5px;
   border:1px solid var(--border);
   display:flex; align-items:center; justify-content:center;
-  flex-direction:column; gap:2px;
+  flex-direction:column; gap:1px;
+  padding:3px 2px; position:relative; overflow:hidden;
+  cursor:default;
 }
-.disk-icon.used   { background:var(--accent-dim); border-color:var(--accent); }
-.disk-icon.free   { background:var(--surface2); }
-.disk-icon span   { font-size:12px; }
+/* Normal used disk */
+.disk-icon.used {
+  background:var(--accent-dim); border-color:var(--accent);
+}
+/* Free disk */
+.disk-icon.free {
+  background:var(--surface2); border-color:var(--border);
+}
+/* ZFS RAID disk — teal/cyan stripe at top */
+.disk-icon.raid-zfs {
+  background:rgba(6,182,212,0.12); border-color:#06b6d4;
+}
+.disk-icon.raid-zfs::before {
+  content:''; position:absolute; top:0; left:0; right:0;
+  height:3px; background:#06b6d4;
+}
+/* LVM disk — amber stripe at top */
+.disk-icon.raid-lvm {
+  background:rgba(245,158,11,0.12); border-color:#f59e0b;
+}
+.disk-icon.raid-lvm::before {
+  content:''; position:absolute; top:0; left:0; right:0;
+  height:3px; background:#f59e0b;
+}
+.disk-icon .di-icon { font-size:16px !important; }
+.disk-icon .di-name {
+  font-size:8px; font-weight:700; font-family:var(--mono);
+  text-align:center; line-height:1.1; max-width:44px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.disk-icon .di-size {
+  font-size:7px; text-align:center; line-height:1.1;
+  color:var(--text-muted); font-family:var(--mono);
+}
+.disk-icon .di-badge {
+  font-size:6px; font-weight:800; letter-spacing:.3px;
+  padding:1px 3px; border-radius:2px; margin-top:1px;
+}
 
 .snap-row {
   display:flex; align-items:flex-start; gap:14px;
@@ -48,6 +85,10 @@
 @keyframes task-stripe-move {
   from { background-position: 0 0; }
   to   { background-position: 32px 0; }
+}
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
 }
 </style>
 </head>
@@ -320,41 +361,77 @@ async function init() {
   }
   pa.innerHTML = html;
 
-  renderPBS();
+  await renderPBS();
   switchTab('snapshots');
   await loadAllSnapshots();
 }
 
 function barColor(p) { return p > 80 ? 'var(--danger)' : p > 60 ? 'var(--warning)' : 'var(--success)'; }
 
-function renderPBS() {
+function fmtDiskSize(bytes) {
+  if (!bytes) return '?';
+  const tb = bytes / (1024 ** 4);
+  if (tb >= 1) return tb.toFixed(1).replace(/\.0$/, '') + 'T';
+  const gb = bytes / (1024 ** 3);
+  if (gb >= 1) return Math.round(gb) + 'G';
+  const mb = bytes / (1024 ** 2);
+  return Math.round(mb) + 'M';
+}
+
+function buildDiskIconHtml(disk) {
+  // disk: { name, size, used, cssClass, iconColor, badgeHtml }
+  const { name, size, cssClass, iconColor, badgeHtml } = disk;
+  const sizeLabel = fmtDiskSize(size);
+  return `<div class="disk-icon ${cssClass}" title="${escapeHtml(name)} — ${sizeLabel}">
+    <span class="material-symbols-rounded di-icon" style="color:${iconColor}">hard_drive</span>
+    <span class="di-name" style="color:${iconColor}">${escapeHtml(name)}</span>
+    <span class="di-size">${sizeLabel}</span>
+    ${badgeHtml}
+  </div>`;
+}
+
+// Cache for node disk info: { node: { disks, zfs_pools, lvm_vgs } }
+const _diskCache = {};
+
+async function fetchNodeDisks(credId, node) {
+  if (_diskCache[node]) return _diskCache[node];
+  try {
+    const data = await apiRequest(`/api/clusters/${credId}/nodes/${node}/disks`);
+    _diskCache[node] = data;
+    return data;
+  } catch {
+    return { disks: [], zfs_pools: [], lvm_vgs: [] };
+  }
+}
+
+async function renderPBS() {
   const el = document.getElementById('pbs-grid');
   if (!BACKUP_TARGETS.length) {
     el.innerHTML = `<div class="empty-state"><span class="material-symbols-rounded">backup</span><div>Nessun storage di backup configurato sui nodi.</div></div>`;
     return;
   }
+
+  // Render skeleton first, then enrich with disk data
   el.innerHTML = BACKUP_TARGETS.map(bt => {
-    const used = bt.used || 0;
-    const total = bt.total || 1;
-    const pct = Math.round(used / total * 100);
-    const col = barColor(pct);
-    const usedGB = Math.round(used / (1024 ** 3));
+    const used    = bt.used  || 0;
+    const total   = bt.total || 1;
+    const pct     = Math.round(used / total * 100);
+    const col     = barColor(pct);
+    const usedGB  = Math.round(used  / (1024 ** 3));
     const totalGB = Math.round(total / (1024 ** 3));
-    const freeGB = Math.max(0, totalGB - usedGB);
-    const diskCount = 8;
-    const usedDisks = Math.round(pct / 100 * diskCount);
-    const disks = Array.from({ length: diskCount }, (_, i) => `
-      <div class="disk-icon ${i < usedDisks ? 'used' : 'free'}">
-        <span class="material-symbols-rounded" style="font-size:14px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">hard_drive</span>
-        <span style="font-size:8px;color:${i < usedDisks ? 'var(--accent)' : 'var(--text-dim)'}">${i < usedDisks ? 'IN USE' : 'FREE'}</span>
-      </div>`).join('');
-    return `<div class="pbs-detail-card">
+    const freeGB  = Math.max(0, totalGB - usedGB);
+    return `<div class="pbs-detail-card" id="pbs-card-${escapeHtml(bt.node)}-${escapeHtml(bt.storage)}">
       <div class="pbs-title">
         <span class="material-symbols-rounded" style="color:var(--warning)">backup</span>
         ${escapeHtml(bt.storage)}
         <span class="chip chip-running" style="margin-left:auto">${escapeHtml(bt.node)}</span>
       </div>
-      <div class="disk-row">${disks}</div>
+      <div class="disk-row" id="disk-row-${escapeHtml(bt.node)}-${escapeHtml(bt.storage)}">
+        <span class="text-xs text-muted" style="padding:8px 0">
+          <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;animation:spin 1s linear infinite">progress_activity</span>
+          Caricamento dischi…
+        </span>
+      </div>
       <div class="flex items-center justify-between mb-8">
         <span class="text-sm text-muted">Utilizzo disco</span>
         <span class="font-mono text-sm" style="color:${col}">${pct}%</span>
@@ -367,6 +444,74 @@ function renderPBS() {
       </div>
     </div>`;
   }).join('');
+
+  // Now asynchronously load disk info per node and update each card's disk-row
+  const credId = getActiveCred();
+  await Promise.all(BACKUP_TARGETS.map(async bt => {
+    const rowId = `disk-row-${bt.node}-${bt.storage}`;
+    const rowEl = document.getElementById(rowId);
+    if (!rowEl) return;
+
+    const diskInfo = await fetchNodeDisks(credId, bt.node);
+    const disks    = diskInfo.disks || [];
+
+    if (!disks.length) {
+      rowEl.innerHTML = `<span class="text-xs text-muted" style="padding:4px 0">Nessun disco rilevato</span>`;
+      return;
+    }
+
+    // Build RAID membership maps
+    const zfsMembers = {}; // diskName -> poolName
+    for (const pool of (diskInfo.zfs_pools || [])) {
+      for (const m of (pool.members || [])) zfsMembers[m] = pool.name;
+    }
+    const lvmMembers = {}; // diskName -> vgName
+    for (const vg of (diskInfo.lvm_vgs || [])) {
+      for (const m of (vg.members || [])) lvmMembers[m] = vg.name;
+    }
+
+    const icons = disks.map(d => {
+      const name = d.name || '?';
+      const isFree = !d.used || d.used === '';
+      const isZFS  = !!zfsMembers[name] || (d.used || '').toUpperCase().includes('ZFS');
+      const isLVM  = !!lvmMembers[name] || (d.used || '').toUpperCase().includes('LVM');
+
+      let cssClass, iconColor, badgeHtml;
+      if (isFree) {
+        cssClass   = 'free';
+        iconColor  = 'var(--text-dim)';
+        badgeHtml  = '';
+      } else if (isZFS) {
+        cssClass   = 'raid-zfs';
+        iconColor  = '#06b6d4';
+        const poolName = zfsMembers[name] || 'ZFS';
+        badgeHtml  = `<span class="di-badge" style="background:rgba(6,182,212,0.2);color:#06b6d4">ZFS</span>`;
+      } else if (isLVM) {
+        cssClass   = 'raid-lvm';
+        iconColor  = '#f59e0b';
+        badgeHtml  = `<span class="di-badge" style="background:rgba(245,158,11,0.2);color:#f59e0b">LVM</span>`;
+      } else {
+        cssClass   = 'used';
+        iconColor  = 'var(--accent)';
+        badgeHtml  = '';
+      }
+
+      return buildDiskIconHtml({ name, size: d.size, cssClass, iconColor, badgeHtml });
+    });
+
+    // Legend if there are RAID disks
+    const hasZFS = disks.some(d => zfsMembers[d.name] || (d.used||'').toUpperCase().includes('ZFS'));
+    const hasLVM = disks.some(d => lvmMembers[d.name] || (d.used||'').toUpperCase().includes('LVM'));
+    let legend = '';
+    if (hasZFS || hasLVM) {
+      legend = `<div style="display:flex;gap:10px;margin-top:6px;flex-wrap:wrap">`;
+      if (hasZFS) legend += `<span style="font-size:10px;color:#06b6d4;display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#06b6d4;display:inline-block"></span>ZFS pool</span>`;
+      if (hasLVM) legend += `<span style="font-size:10px;color:#f59e0b;display:flex;align-items:center;gap:3px"><span style="width:8px;height:8px;border-radius:2px;background:#f59e0b;display:inline-block"></span>LVM</span>`;
+      legend += `</div>`;
+    }
+
+    rowEl.outerHTML = `<div class="disk-row" id="${rowId}">${icons.join('')}</div>${legend}`;
+  }));
 }
 
 async function loadAllSnapshots() {
@@ -510,7 +655,7 @@ async function deleteBackup(credId, nodeEnc, storageEnc, volidEnc, btn) {
         await clusterApi.forceRefresh(credId).catch(() => {});
         await refreshClusterData();
         BACKUP_TARGETS = CLUSTER_RAW?.backup_targets || [];
-        renderPBS();
+        await renderPBS();
       } catch (e) {
         btn.disabled = false;
         btn.innerHTML = '<span class="material-symbols-rounded" style="font-size:15px">delete</span>';
