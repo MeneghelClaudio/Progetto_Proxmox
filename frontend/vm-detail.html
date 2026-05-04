@@ -297,8 +297,10 @@ canvas.sparkline { width:100%; height:100%; }
             <input type="number" class="form-input" id="cvm-vmid" placeholder="es. 101" min="100"/>
           </div>
           <div class="form-group">
-            <label class="form-label">Nome</label>
-            <input type="text" class="form-input" id="cvm-name" placeholder="es. debian-web"/>
+            <label class="form-label">Nome <span id="cvm-name-hint" style="font-size:10px;font-weight:400;color:var(--text-dim)">(lettere, numeri, trattini)</span></label>
+            <input type="text" class="form-input" id="cvm-name" placeholder="es. debian-web"
+                   oninput="validateCvmName(this)"/>
+            <div id="cvm-name-error" style="font-size:11px;color:var(--danger);margin-top:4px;display:none"></div>
           </div>
         </div>
 
@@ -814,18 +816,40 @@ function validateDeleteInput() {
 async function executeDelete() {
   const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
+  const credId = getActiveCred();
   const toastId = showTaskToast(`Eliminazione ${vm.name}…`);
   closeModal('modal-delete');
   try {
-    await vmsApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, vm.name);
-    finishTaskToast(toastId, true, `${vm.name} eliminata`);
+    const res = await vmsApi.remove(credId, vm.kind, vm.node, vm.id, vm.name);
+
+    // Attendi che il task Proxmox sia completato prima di refreshare il tree,
+    // altrimenti il backend ricostruisce il tree mentre la VM è ancora in fase di cancellazione.
+    if (res?.upid) {
+      await _waitPveTask(credId, vm.node, res.upid);
+    }
+
+    // Invalida la cache backend, poi ricarica il tree
+    await clusterApi.forceRefresh(credId).catch(() => {});
     await refreshClusterData();
     DATA = CLUSTER_DATA; allVMs = DATA.vms; activeVMId = null;
     renderVMList();
+    finishTaskToast(toastId, true, `${vm.name} eliminata`);
     document.getElementById('detail-panel').innerHTML = '<div class="detail-header" style="justify-content:center;color:var(--text-muted)"><span class="material-symbols-rounded" style="font-size:40px;color:var(--text-dim)">touch_app</span><span>Seleziona una VM dalla lista</span></div>';
   } catch (e) {
     finishTaskToast(toastId, false, `Errore eliminazione ${vm.name}`, e.detail || e.message);
     showErrorModal(`Errore eliminazione ${vm.name}`, e.message, e.detail);
+  }
+}
+
+// Polling leggero su un task PVE finché non è stopped (max 2 min)
+async function _waitPveTask(credId, node, upid, maxMs = 120000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const st = await pvTaskApi.status(credId, node, upid);
+      if (!st.running) return;   // stopped (ok o error)
+    } catch { return; }          // se fallisce, prosegui comunque
   }
 }
 
@@ -1005,6 +1029,25 @@ async function deleteSnap(name) {
 // Crea VM/CT — modal con risorse caricate da /resources
 let CREATE_RESOURCES = null;
 
+function validateCvmName(input) {
+  const val = input.value.trim();
+  const errEl = document.getElementById('cvm-name-error');
+  if (!val) { input.style.borderColor = ''; if (errEl) errEl.style.display = 'none'; return true; }
+  const DNS_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/;
+  const valid = DNS_RE.test(val);
+  input.style.borderColor = valid ? 'var(--success)' : 'var(--danger)';
+  if (errEl) {
+    if (!valid) {
+      const suggested = val.replace(/[^a-zA-Z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      errEl.textContent = `Caratteri non validi. ${suggested ? 'Suggerimento: "' + suggested + '"' : 'Usa solo lettere, numeri e trattini.'}`;
+      errEl.style.display = '';
+    } else {
+      errEl.style.display = 'none';
+    }
+  }
+  return valid;
+}
+
 async function openCreateVM() {
   const sel = document.getElementById('cvm-node');
   const onlineNodes = DATA.nodes.filter(n => n.status === 'running');
@@ -1133,6 +1176,12 @@ async function executeCreateVM() {
   if (!name) { showToast('Inserisci un nome', 'warning'); return; }
   if (!storage) { showToast('Seleziona uno storage per il disco', 'warning'); return; }
 
+  // Proxmox richiede nomi DNS validi: solo lettere, numeri e trattini.
+  if (!validateCvmName(document.getElementById('cvm-name'))) {
+    showToast(`Nome "${name}" non valido per Proxmox — usa solo lettere, numeri e trattini (es. "debian-web")`, 'danger', { duration: 6000 });
+    return;
+  }
+
   const credId = getActiveCred();
   let payload;
 
@@ -1154,9 +1203,10 @@ async function executeCreateVM() {
     try {
       const toastId = showTaskToast(`Creazione VM "${name}" (${vmid})…`);
       closeModal('modal-create-vm');
-      await createApi.vm(credId, node, payload);
+      const res = await createApi.vm(credId, node, payload);
+      if (res?.upid) await _waitPveTask(credId, node, res.upid, 180000);
+      await reloadAfterCreate(credId);
       finishTaskToast(toastId, true, `VM "${name}" creata`);
-      await reloadAfterCreate();
     } catch (e) {
       showCreateError(name, e);
     }
@@ -1177,21 +1227,21 @@ async function executeCreateVM() {
     try {
       const toastId = showTaskToast(`Creazione CT "${name}" (${vmid})…`);
       closeModal('modal-create-vm');
-      await createApi.ct(credId, node, payload);
+      const res = await createApi.ct(credId, node, payload);
+      if (res?.upid) await _waitPveTask(credId, node, res.upid, 180000);
+      await reloadAfterCreate(credId);
       finishTaskToast(toastId, true, `Container "${name}" creato`);
-      await reloadAfterCreate();
     } catch (e) {
       showCreateError(name, e);
     }
   }
 }
 
-async function reloadAfterCreate() {
-  setTimeout(async () => {
-    await refreshClusterData();
-    DATA = CLUSTER_DATA; allVMs = DATA.vms;
-    renderVMList(document.getElementById('vm-search').value);
-  }, 2000);
+async function reloadAfterCreate(credId) {
+  await clusterApi.forceRefresh(credId).catch(() => {});
+  await refreshClusterData();
+  DATA = CLUSTER_DATA; allVMs = DATA.vms;
+  renderVMList(document.getElementById('vm-search').value);
 }
 
 function showCreateError(name, e) {
