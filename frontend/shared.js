@@ -425,6 +425,102 @@ function escapeHtmlS(s) {
 // Auto-mount the tasks panel after DOM ready
 document.addEventListener('DOMContentLoaded', () => { ensureTasksPanel(); });
 
+// ---------- GitHub-style double-confirmation modal ----------
+// Usage:
+//   confirmDelete({
+//     type:        'Backup',           // shown in title: "Elimina Backup"
+//     name:        'vzdump-ct-102…',   // shown in title subtitle
+//     description: 'Operazione irreversibile…',
+//     confirmText: 'vzdump-ct-102…',   // user must type this exactly
+//     onConfirm:   async () => { ... } // called after confirmation
+//   })
+function confirmDelete({ type = 'risorsa', name = '', description = '', confirmText, onConfirm }) {
+  const token = confirmText || name || type;
+
+  // Build or reuse the modal
+  let overlay = document.getElementById('pmx-confirm-delete-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'pmx-confirm-delete-overlay';
+    overlay.className = 'pmx-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="pmx-confirm-modal" role="dialog" aria-modal="true">
+        <div class="pmx-confirm-header">
+          <span class="material-symbols-rounded ms-fill" style="color:var(--danger);font-size:22px">warning</span>
+          <div style="flex:1;min-width:0">
+            <div id="pmx-confirm-title" style="font-weight:700;font-size:14px;color:var(--text)"></div>
+            <div id="pmx-confirm-subtitle" style="font-size:11px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px"></div>
+          </div>
+          <button style="background:none;border:none;cursor:pointer;color:var(--text-dim);padding:0;display:flex;align-items:center" onclick="document.getElementById('pmx-confirm-delete-overlay').classList.remove('open')">
+            <span class="material-symbols-rounded" style="font-size:18px">close</span>
+          </button>
+        </div>
+        <div class="pmx-confirm-body">
+          <div id="pmx-confirm-desc" class="pmx-confirm-desc"></div>
+          <div class="pmx-confirm-label">Per confermare, digita <code id="pmx-confirm-token"></code> nel campo sottostante:</div>
+          <input id="pmx-confirm-input" class="confirm-input" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="Digita qui per confermare…" style="width:100%;box-sizing:border-box"/>
+        </div>
+        <div class="pmx-confirm-footer">
+          <button class="btn btn-secondary btn-sm" onclick="document.getElementById('pmx-confirm-delete-overlay').classList.remove('open')">Annulla</button>
+          <button id="pmx-confirm-btn" class="btn btn-danger btn-sm" disabled>
+            <span class="material-symbols-rounded" style="font-size:15px">delete_forever</span>
+            Elimina
+          </button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    // Close on backdrop click
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay) overlay.classList.remove('open');
+    });
+  }
+
+  // Populate dynamic content
+  document.getElementById('pmx-confirm-title').textContent = `Elimina ${type}`;
+  document.getElementById('pmx-confirm-subtitle').textContent = name;
+  document.getElementById('pmx-confirm-desc').textContent = description || `Questa operazione è irreversibile. La risorsa verrà eliminata definitivamente.`;
+  document.getElementById('pmx-confirm-token').textContent = token;
+
+  // Clone both elements to wipe all previous event listeners
+  const oldInput = document.getElementById('pmx-confirm-input');
+  const oldBtn   = document.getElementById('pmx-confirm-btn');
+
+  const newInput = oldInput.cloneNode(true);
+  oldInput.parentNode.replaceChild(newInput, oldInput);
+
+  const newBtn = oldBtn.cloneNode(true);
+  newBtn.disabled = true;
+  oldBtn.parentNode.replaceChild(newBtn, oldBtn);
+
+  // Reset input state
+  newInput.value = '';
+  newInput.classList.remove('match');
+
+  // Wire input → button (both refs are now correct)
+  newInput.addEventListener('input', () => {
+    const match = newInput.value === token;
+    newBtn.disabled = !match;
+    newInput.classList.toggle('match', match);
+  });
+  newInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !newBtn.disabled) newBtn.click();
+    if (e.key === 'Escape') overlay.classList.remove('open');
+  });
+
+  // Wire confirm button
+  newBtn.addEventListener('click', async () => {
+    if (newInput.value !== token) return;
+    overlay.classList.remove('open');
+    if (onConfirm) await onConfirm();
+  });
+
+  overlay.classList.add('open');
+  // Focus the input after a tick (animation timing)
+  setTimeout(() => newInput.focus(), 80);
+}
+
 // ---------- Active credential ----------
 
 async function ensureActiveCred() {

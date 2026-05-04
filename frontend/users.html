@@ -405,13 +405,20 @@ async function toggleActive(id, nextActive) {
 }
 
 async function deleteUser(id, name) {
-  if (!confirm(`Eliminare l'utente "${name}"?`)) return;
-  try {
-    await usersApi.remove(id);
-    showToast(`Utente ${name} eliminato`, 'warning');
-    await loadUsers();
-    switchTab('users');
-  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+  confirmDelete({
+    type: 'Utente',
+    name: name,
+    description: `Stai per eliminare l'account di "${name}". L'utente perderà immediatamente l'accesso all'applicazione.`,
+    confirmText: name,
+    onConfirm: async () => {
+      try {
+        await usersApi.remove(id);
+        showToast(`Utente ${name} eliminato`, 'warning');
+        await loadUsers();
+        switchTab('users');
+      } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+    },
+  });
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }

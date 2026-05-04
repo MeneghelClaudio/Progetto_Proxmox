@@ -43,6 +43,12 @@
   text-align:center; color:var(--text-muted);
 }
 .empty-state .material-symbols-rounded { font-size:48px; color:var(--text-dim); margin-bottom:12px; }
+
+/* Animazione strisce barra indeterminata */
+@keyframes task-stripe-move {
+  from { background-position: 0 0; }
+  to   { background-position: 32px 0; }
+}
 </style>
 </head>
 <body>
@@ -75,6 +81,136 @@
       </div>
     </div>
     <div id="tab-content"></div>
+
+    <!-- Modal: progresso task (backup / snapshot) -->
+    <div class="modal-overlay hidden" id="modal-task-progress">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-title" id="task-prog-title">
+          <span class="material-symbols-rounded" id="task-prog-icon" style="vertical-align:middle;margin-right:6px">hourglass_top</span>
+          <span id="task-prog-label">Operazione in corso</span>
+        </div>
+        <div class="modal-sub" id="task-prog-subtitle" style="font-family:var(--mono);font-size:11px;word-break:break-all"></div>
+
+        <div style="margin:20px 0 10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span id="task-prog-status" style="font-size:13px;color:var(--text-muted)">In corso…</span>
+            <span id="task-prog-pct" style="font-size:13px;font-weight:700;font-family:var(--mono);color:var(--accent)">—</span>
+          </div>
+          <!-- barra progresso: più alta della stat-bar standard -->
+          <div style="height:10px;border-radius:5px;background:var(--surface3);overflow:hidden;position:relative">
+            <div id="task-prog-bar"
+                 style="height:100%;border-radius:5px;width:0%;background:var(--accent);transition:width 0.6s ease"></div>
+            <!-- striatura animata sovrapposta quando indeterminato -->
+            <div id="task-prog-stripes" style="
+              position:absolute;inset:0;
+              background:repeating-linear-gradient(
+                -45deg,
+                transparent, transparent 8px,
+                rgba(255,255,255,.08) 8px, rgba(255,255,255,.08) 16px
+              );
+              animation:task-stripe-move 1s linear infinite;
+            "></div>
+          </div>
+        </div>
+
+        <div id="task-prog-log"
+             style="font-size:11px;color:var(--text-dim);font-family:var(--mono);
+                    min-height:18px;word-break:break-all;padding:6px 8px;
+                    background:var(--surface2);border-radius:6px;margin-top:4px;
+                    max-height:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        </div>
+
+        <div class="modal-footer" style="margin-top:16px">
+          <button class="btn btn-secondary" id="task-prog-close"
+                  disabled onclick="closeTaskProgress()">
+            Chiudi
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: aggiungi PBS -->
+    <div class="modal-overlay hidden" id="modal-add-pbs">
+      <div class="modal" style="max-width:560px">
+        <div class="modal-title">
+          <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">backup_table</span>
+          Aggiungi Proxmox Backup Server
+        </div>
+        <div class="modal-sub">
+          Il PBS verrà registrato come storage di tipo <b>pbs</b> nel server Proxmox selezionato.
+          Se quel nodo fa parte di un cluster, lo storage sarà visibile su tutti i nodi.
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Server Proxmox target <span style="color:var(--danger)">*</span></label>
+          <select class="form-input" id="pbs-target-cred">
+            <option value="">— seleziona server —</option>
+          </select>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">ID storage in PVE <span style="color:var(--danger)">*</span></label>
+            <input type="text" class="form-input" id="pbs-storage-id" placeholder="es. pbs-main" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Porta PBS</label>
+            <input type="number" class="form-input" id="pbs-port" value="8007" />
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Host / IP PBS <span style="color:var(--danger)">*</span></label>
+            <input type="text" class="form-input" id="pbs-server" placeholder="192.168.1.100" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Datastore PBS <span style="color:var(--danger)">*</span></label>
+            <input type="text" class="form-input" id="pbs-datastore" placeholder="es. main" />
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Utente PBS <span style="color:var(--danger)">*</span></label>
+            <input type="text" class="form-input" id="pbs-username" placeholder="admin@pbs" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Password <span style="color:var(--danger)">*</span></label>
+            <div style="position:relative;display:block">
+              <input type="password" class="form-input" id="pbs-password" placeholder="••••••••"
+                     style="width:100%;box-sizing:border-box;padding-right:44px" />
+              <button type="button" id="pbs-eye"
+                      style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px;line-height:0">
+                <span class="material-symbols-rounded" id="pbs-eye-icon" style="font-size:18px;pointer-events:none">visibility</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">
+            Fingerprint TLS <span style="color:var(--danger)">*</span>
+          </label>
+          <input type="text" class="form-input" id="pbs-fingerprint"
+                 placeholder="XX:XX:XX:... (SHA-256 del certificato PBS)" style="font-family:var(--mono);font-size:12px" />
+        </div>
+
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="pbs-shared" checked />
+            Condiviso — visibile su tutti i nodi del cluster
+          </label>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-pbs')">Annulla</button>
+          <button class="btn btn-primary" onclick="savePBS()">
+            <span class="material-symbols-rounded">save</span> Aggiungi PBS
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Modal: manual backup -->
     <div class="modal-overlay hidden" id="modal-backup">
@@ -157,6 +293,10 @@ async function init() {
     document.getElementById('tab-content').innerHTML = '<div class="card"><p class="text-muted">Nessun server Proxmox configurato.</p></div>';
     return;
   }
+  // Force-refresh del tree per garantire che le percentuali PBS siano calcolate fresh
+  const creds = await credsApi.list().catch(() => []);
+  await Promise.allSettled(creds.map(c => clusterApi.forceRefresh(c.id)));
+
   DATA = await ensureClusterData();
   BACKUP_TARGETS = CLUSTER_RAW?.backup_targets || [];
 
@@ -171,6 +311,11 @@ async function init() {
   if (can(session, 'snapshot_create')) {
     html += `<button class="btn btn-primary" onclick="openSnapshotModal()">
       <span class="material-symbols-rounded">camera</span> Nuovo snapshot
+    </button>`;
+  }
+  if (can(session, 'add_server') /* senior+ */) {
+    html += `<button class="btn btn-secondary" style="margin-left:auto" onclick="openAddPBS()">
+      <span class="material-symbols-rounded">backup_table</span> Aggiungi PBS
     </button>`;
   }
   pa.innerHTML = html;
@@ -310,18 +455,69 @@ async function loadBackupsForEachStorage() {
     try {
       const items = await backupApi.list(credId, bt.node, bt.storage);
       if (!items.length) { el.innerHTML = '<span class="text-muted">Nessun backup.</span>'; continue; }
+      const canDelete = can(session, 'delete');
       el.innerHTML = `<div class="table-wrap"><table>
-        <thead><tr><th>Volume</th><th>VMID</th><th>Data</th><th>Dimensione</th></tr></thead>
-        <tbody>${items.map(b => `<tr>
-          <td class="mono text-sm">${escapeHtml(b.volid || '')}</td>
-          <td class="mono">${b.vmid || ''}</td>
-          <td class="mono text-sm">${b.ctime ? new Date(b.ctime * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''}</td>
-          <td>${b.size ? (Math.round(b.size / (1024 ** 2)) + ' MB') : ''}</td>
-        </tr>`).join('')}</tbody></table></div>`;
+        <thead><tr>
+          <th>Volume</th><th>VMID</th><th>Data</th><th>Dimensione</th>
+          ${canDelete ? '<th style="width:60px"></th>' : ''}
+        </tr></thead>
+        <tbody>${items.map(b => {
+          const volEnc = encodeURIComponent(b.volid || '');
+          const nodeEnc = encodeURIComponent(bt.node);
+          const storEnc = encodeURIComponent(bt.storage);
+          const credEnc = credId;
+          return `<tr id="bkrow-${volEnc}">
+            <td class="mono text-sm" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(b.volid || '')}">${escapeHtml(b.volid || '')}</td>
+            <td class="mono">${b.vmid || ''}</td>
+            <td class="mono text-sm">${b.ctime ? new Date(b.ctime * 1000).toISOString().slice(0, 16).replace('T', ' ') : ''}</td>
+            <td class="mono text-sm">${b.size ? (Math.round(b.size / (1024 ** 2)) + ' MB') : ''}</td>
+            ${canDelete ? `<td style="text-align:center">
+              <button class="btn btn-sm btn-danger" title="Elimina backup"
+                onclick="deleteBackup(${credEnc}, '${nodeEnc}', '${storEnc}', '${volEnc}', this)">
+                <span class="material-symbols-rounded" style="font-size:15px">delete</span>
+              </button>
+            </td>` : ''}
+          </tr>`;
+        }).join('')}</tbody></table></div>`;
     } catch (e) {
       el.innerHTML = `<span class="text-danger">${escapeHtml(e.message)}</span>`;
     }
   }
+}
+
+async function deleteBackup(credId, nodeEnc, storageEnc, volidEnc, btn) {
+  const volid   = decodeURIComponent(volidEnc);
+  const node    = decodeURIComponent(nodeEnc);
+  const storage = decodeURIComponent(storageEnc);
+
+  // Estrai info leggibili per il messaggio di conferma
+  const parts = volid.split('/');
+  const label = parts[parts.length - 1] || volid;
+
+  confirmDelete({
+    type: 'Backup',
+    name: label,
+    description: `Stai per eliminare il backup dal nodo "${node}" / storage "${storage}". L'operazione è irreversibile.`,
+    confirmText: label,
+    onConfirm: async () => {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="material-symbols-rounded" style="font-size:15px;animation:pmx-spin 1s linear infinite">progress_activity</span>';
+      try {
+        await backupApi.remove(credId, node, storage, volid);
+        const row = document.getElementById(`bkrow-${volidEnc}`);
+        if (row) row.remove();
+        showToast('Backup eliminato', 'warning');
+        await clusterApi.forceRefresh(credId).catch(() => {});
+        await refreshClusterData();
+        BACKUP_TARGETS = CLUSTER_RAW?.backup_targets || [];
+        renderPBS();
+      } catch (e) {
+        btn.disabled = false;
+        btn.innerHTML = '<span class="material-symbols-rounded" style="font-size:15px">delete</span>';
+        showToast('Errore: ' + e.message, 'danger');
+      }
+    },
+  });
 }
 
 // --- Modals ---
@@ -356,11 +552,16 @@ async function startBackup() {
   const mode = document.getElementById('backup-mode').value;
   const compress = document.getElementById('backup-compress').value;
   try {
-    await backupApi.create(getActiveCred(), node, vm.id, {
+    const result = await backupApi.create(getActiveCred(), node, vm.id, {
       storage, mode, compress, notes: null,
     });
     closeModal('modal-backup');
-    showToast('Backup avviato', 'success');
+    if (result?.upid) {
+      trackPVETask(getActiveCred(), node, result.upid,
+        `Backup — ${escapeHtml(vm.name || String(vmId))}`, 'backup');
+    } else {
+      showToast('Backup avviato', 'info');
+    }
   } catch (e) {
     showToast('Errore: ' + e.message, 'danger');
   }
@@ -373,12 +574,17 @@ async function createSnapshot() {
   const name = document.getElementById('snap-name').value || 'snapshot';
   const desc = document.getElementById('snap-desc').value;
   try {
-    await snapApi.create(getActiveCred(), vm.kind, vm.node, vm.id, {
+    const result = await snapApi.create(getActiveCred(), vm.kind, vm.node, vm.id, {
       snapname: name, description: desc,
     });
     closeModal('modal-snapshot');
-    showToast(`Snapshot "${name}" creato`, 'success');
-    await loadAllSnapshots();
+    if (result?.upid) {
+      trackPVETask(getActiveCred(), vm.node, result.upid,
+        `Snapshot "${escapeHtml(name)}" — ${escapeHtml(vm.name || String(vmId))}`, 'camera');
+    } else {
+      showToast(`Snapshot "${name}" creato`, 'success');
+      await loadAllSnapshots();
+    }
   } catch (e) {
     showToast('Errore: ' + e.message, 'danger');
   }
@@ -388,27 +594,226 @@ async function rollbackSnap(vmId, nameEnc) {
   const vm = DATA.vms.find(v => v.id === vmId);
   if (!vm) return;
   const name = decodeURIComponent(nameEnc);
-  if (!confirm(`Ripristinare "${name}" su ${vm.name}?`)) return;
-  try {
-    await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, name);
-    showToast('Rollback avviato', 'info');
-  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+  confirmDelete({
+    type: 'Rollback Snapshot',
+    name: name,
+    description: `Stai per ripristinare la VM "${vm.name}" allo snapshot "${name}". Lo stato attuale andrà perso.`,
+    confirmText: name,
+    onConfirm: async () => {
+      try {
+        await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, name);
+        showToast('Rollback avviato', 'info');
+      } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+    },
+  });
 }
 
 async function deleteSnap(vmId, nameEnc) {
   const vm = DATA.vms.find(v => v.id === vmId);
   if (!vm) return;
   const name = decodeURIComponent(nameEnc);
-  if (!confirm(`Eliminare lo snapshot "${name}"?`)) return;
-  try {
-    await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, name);
-    showToast('Snapshot eliminato', 'warning');
-    await loadAllSnapshots();
-  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+  confirmDelete({
+    type: 'Snapshot',
+    name: name,
+    description: `Stai per eliminare lo snapshot "${name}" dalla VM "${vm.name}". L'operazione è irreversibile.`,
+    confirmText: name,
+    onConfirm: async () => {
+      try {
+        await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, name);
+        showToast('Snapshot eliminato', 'warning');
+        await loadAllSnapshots();
+      } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+    },
+  });
 }
 
 function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ---------- Task progress tracking ----------
+
+let _taskPollTimer  = null;
+let _taskPollCredId = null;
+let _taskPollNode   = null;
+let _taskPollUpid   = null;
+let _taskPseudoPct  = 0;   // percentuale simulata se il log non ne ha una reale
+
+function closeTaskProgress() {
+  clearTimeout(_taskPollTimer);
+  _taskPollTimer = null;
+  closeModal('modal-task-progress');
+}
+
+async function trackPVETask(credId, node, upid, label, icon = 'hourglass_top') {
+  // ferma eventuale polling precedente
+  clearTimeout(_taskPollTimer);
+  _taskPollTimer  = null;
+  _taskPseudoPct  = 2;
+  _taskPollCredId = credId;
+  _taskPollNode   = node;
+  _taskPollUpid   = upid;
+
+  // Prepara il modal
+  document.getElementById('task-prog-label').textContent    = label;
+  document.getElementById('task-prog-icon').textContent     = icon;
+  document.getElementById('task-prog-subtitle').textContent = upid;
+  document.getElementById('task-prog-status').textContent   = 'In corso…';
+  document.getElementById('task-prog-pct').textContent      = '—';
+  document.getElementById('task-prog-pct').style.color      = 'var(--accent)';
+  document.getElementById('task-prog-log').textContent      = '';
+  document.getElementById('task-prog-close').disabled       = true;
+
+  // Barra a 0% con strisce animate (indeterminato)
+  const bar     = document.getElementById('task-prog-bar');
+  const stripes = document.getElementById('task-prog-stripes');
+  bar.style.width      = '2%';
+  bar.style.background = 'var(--accent)';
+  stripes.style.display = '';
+
+  openModal('modal-task-progress');
+
+  async function poll() {
+    // Se il modal è stato chiuso manualmente, stop
+    if (!_taskPollTimer && document.getElementById('modal-task-progress').classList.contains('hidden')) return;
+
+    let res;
+    try {
+      res = await pvTaskApi.status(credId, node, upid);
+    } catch (e) {
+      document.getElementById('task-prog-status').textContent = 'Errore di connessione — riprovo…';
+      _taskPollTimer = setTimeout(poll, 3000);
+      return;
+    }
+
+    // Aggiorna log
+    if (res.last_log) {
+      document.getElementById('task-prog-log').textContent = res.last_log;
+    }
+
+    // Calcola percentuale da mostrare
+    let pct;
+    if (res.progress > 0) {
+      // percentuale reale dal log Proxmox
+      pct = res.running ? Math.min(res.progress, 99) : res.progress;
+    } else {
+      // simulazione: curva logaritmica che sale veloce poi rallenta
+      _taskPseudoPct = Math.min(90, _taskPseudoPct + (90 - _taskPseudoPct) * 0.08 + 0.4);
+      pct = res.running ? Math.round(_taskPseudoPct) : (res.ok ? 100 : Math.round(_taskPseudoPct));
+    }
+
+    if (res.running) {
+      bar.style.width    = pct + '%';
+      stripes.style.display = '';  // mantieni striature durante l'esecuzione
+      document.getElementById('task-prog-pct').textContent = pct + '%';
+      document.getElementById('task-prog-status').textContent = 'In corso…';
+      _taskPollTimer = setTimeout(poll, 2000);
+
+    } else if (res.ok) {
+      // ✓ Completato
+      stripes.style.display = 'none';
+      bar.style.width      = '100%';
+      bar.style.background = 'var(--success)';
+      document.getElementById('task-prog-pct').textContent    = '100%';
+      document.getElementById('task-prog-pct').style.color    = 'var(--success)';
+      document.getElementById('task-prog-status').textContent = '✓ Completato con successo';
+      document.getElementById('task-prog-icon').textContent   = 'check_circle';
+      document.getElementById('task-prog-close').disabled     = false;
+      showToast(label + ' completato', 'success');
+      // Ricarica snapshot se era uno snapshot
+      if (icon === 'camera') await loadAllSnapshots();
+
+    } else {
+      // ✗ Errore
+      stripes.style.display = 'none';
+      bar.style.background = 'var(--danger)';
+      document.getElementById('task-prog-pct').textContent    = pct + '%';
+      document.getElementById('task-prog-pct').style.color    = 'var(--danger)';
+      document.getElementById('task-prog-status').textContent =
+        '✗ Errore: ' + (res.exitstatus || 'task fallito');
+      document.getElementById('task-prog-icon').textContent   = 'error';
+      document.getElementById('task-prog-close').disabled     = false;
+      showToast(label + ' fallito', 'danger');
+    }
+  }
+
+  // Prima poll immediata
+  await poll();
+}
+
+// ---------- PBS ----------
+
+async function openAddPBS() {
+  // Popola il dropdown con tutte le credenziali registrate
+  const creds = await credsApi.list().catch(() => []);
+  const sel = document.getElementById('pbs-target-cred');
+  sel.innerHTML = creds.length
+    ? creds.map(c => `<option value="${c.id}">${escapeHtml(c.name)} (${escapeHtml(c.host)}:${c.port})</option>`).join('')
+    : '<option value="">Nessun server configurato</option>';
+
+  // Reset campi
+  ['pbs-storage-id','pbs-server','pbs-datastore','pbs-username','pbs-password','pbs-fingerprint'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('pbs-port').value = '8007';
+  document.getElementById('pbs-shared').checked = true;
+  document.getElementById('pbs-password').type = 'password';
+  document.getElementById('pbs-eye-icon').textContent = 'visibility';
+
+  openModal('modal-add-pbs');
+}
+
+async function savePBS() {
+  const credId    = parseInt(document.getElementById('pbs-target-cred').value);
+  const storageId = document.getElementById('pbs-storage-id').value.trim();
+  const server    = document.getElementById('pbs-server').value.trim();
+  const port      = parseInt(document.getElementById('pbs-port').value) || 8007;
+  const datastore = document.getElementById('pbs-datastore').value.trim();
+  const username  = document.getElementById('pbs-username').value.trim();
+  const password  = document.getElementById('pbs-password').value;
+  const fingerprint = document.getElementById('pbs-fingerprint').value.trim();
+  const shared    = document.getElementById('pbs-shared').checked;
+
+  if (!credId || !storageId || !server || !datastore || !username || !password || !fingerprint) {
+    showToast('Compila tutti i campi obbligatori (incluso il Fingerprint TLS)', 'warning');
+    return;
+  }
+
+  const btn = document.getElementById('pbs-save-btn') || document.querySelector('#modal-add-pbs .btn-primary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Aggiunta in corso…'; }
+
+  try {
+    await pbsApi.add(credId, { storage_id: storageId, server, port, datastore, username, password, fingerprint: fingerprint || null, shared });
+    showToast(`PBS "${storageId}" aggiunto con successo`, 'success');
+    closeModal('modal-add-pbs');
+    // Ricarica i dati del cluster per aggiornare la lista storage
+    await refreshClusterData();
+    BACKUP_TARGETS = CLUSTER_RAW?.backup_targets || [];
+    renderPBS();
+  } catch (e) {
+    const msg = e.message || '';
+    if (msg.includes('già') || e.status === 409) {
+      showToast(`Uno storage "${storageId}" esiste già su quel server`, 'danger');
+    } else {
+      showToast('Errore: ' + msg, 'danger');
+    }
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<span class="material-symbols-rounded">save</span> Aggiungi PBS'; }
+  }
+}
+
+// Toggle visibilità password PBS
+document.addEventListener('DOMContentLoaded', () => {
+  const eye = document.getElementById('pbs-eye');
+  if (eye) {
+    eye.addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      const inp  = document.getElementById('pbs-password');
+      const icon = document.getElementById('pbs-eye-icon');
+      if (inp.type === 'password') { inp.type = 'text'; icon.textContent = 'visibility_off'; }
+      else { inp.type = 'password'; icon.textContent = 'visibility'; }
+    });
+  }
+});
 
 init();
 

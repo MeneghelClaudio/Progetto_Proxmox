@@ -272,6 +272,16 @@ a:hover { color: var(--accent-h); }
 .stat-bar { height: 4px; border-radius: 2px; background: var(--surface3); overflow: hidden; }
 .stat-bar-fill { height: 100%; border-radius: 2px; transition: width .3s; }
 
+/* Confirm-delete input (shared) */
+.confirm-input {
+  width:100%; padding:10px 14px; border-radius:var(--radius);
+  background:var(--surface2); border:1px solid var(--border);
+  color:var(--text); font-size:13px; font-family:var(--mono);
+  margin-top:10px; box-sizing:border-box;
+}
+.confirm-input:focus { outline:none; border-color:var(--danger); }
+.confirm-input.match  { border-color:var(--danger); background:var(--danger-dim); }
+
 /* Status dots */
 .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .status-dot.running { background: var(--success); box-shadow: 0 0 6px var(--success); }
@@ -517,6 +527,37 @@ tbody tr:hover td { background: var(--surface2); }
 @keyframes pmx-spin { to { transform: rotate(360deg); } }
 .pmx-spin { animation: pmx-spin 1.2s linear infinite; transform-origin: center; }
 .hidden { display: none !important; }
+
+/* ---------- Confirm-delete modal ---------- */
+.pmx-confirm-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+  display: none; align-items: center; justify-content: center; z-index: 3000;
+}
+.pmx-confirm-overlay.open { display: flex; }
+.pmx-confirm-modal {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 12px; width: min(460px, 94vw);
+  box-shadow: 0 20px 60px rgba(0,0,0,.5); overflow: hidden;
+}
+.pmx-confirm-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  background: var(--surface3);
+}
+.pmx-confirm-body { padding: 20px; }
+.pmx-confirm-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; line-height: 1.5; }
+.pmx-confirm-label {
+  font-size: 12px; color: var(--text-dim); margin-bottom: 6px;
+}
+.pmx-confirm-label code {
+  font-family: var(--mono, monospace); background: var(--surface3);
+  padding: 1px 5px; border-radius: 4px; color: var(--danger); font-size: 12px;
+}
+.pmx-confirm-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px; border-top: 1px solid var(--border);
+  background: var(--surface3);
+}
 
 /* ---------- Migration target highlight (dashed border) ---------- */
 .migration-target-highlight {

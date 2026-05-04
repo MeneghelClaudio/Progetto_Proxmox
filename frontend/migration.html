@@ -391,14 +391,21 @@ async function dismissTask(id) {
 }
 
 async function stopTask(id) {
-  if (!confirm('Vuoi annullare questa migrazione?')) return;
-  try {
-    await tasksApi.stop(id);
-    addLog('Migrazione annullata dall\'utente', 'error');
-    showToast('Migrazione annullata', 'warning');
-  } catch (e) {
-    showToast(`Errore durante l'annullamento: ${e.message}`, 'danger');
-  }
+  confirmDelete({
+    type: 'Migrazione',
+    name: `Task #${id}`,
+    description: 'Stai per annullare questa migrazione in corso. La VM verrà lasciata nel nodo sorgente.',
+    confirmText: `Task #${id}`,
+    onConfirm: async () => {
+      try {
+        await tasksApi.stop(id);
+        addLog('Migrazione annullata dall\'utente', 'error');
+        showToast('Migrazione annullata', 'warning');
+      } catch (e) {
+        showToast(`Errore durante l'annullamento: ${e.message}`, 'danger');
+      }
+    },
+  });
 }
 
 async function showMigrationError(taskId, vmName, shortMsg) {

@@ -1,5 +1,23 @@
 // sidebar.js — Renders the sidebar + topbar for every app page.
 
+/**
+ * Topbar refresh: invalida la cache server-side per tutti i server registrati,
+ * poi ricarica la pagina per mostrare dati freschi (inclusa percentuale PBS).
+ */
+async function topbarRefresh(btn) {
+  if (btn) {
+    btn.disabled = true;
+    const icon = btn.querySelector('.material-symbols-rounded');
+    if (icon) icon.style.animation = 'spin 0.8s linear infinite';
+  }
+  try {
+    const creds = await credsApi.list().catch(() => []);
+    // Invalida in parallelo tutte le credenziali registrate
+    await Promise.allSettled(creds.map(c => clusterApi.forceRefresh(c.id)));
+  } catch { /* non blocca il reload */ }
+  location.reload();
+}
+
 async function buildSidebar(activePage) {
   const session = requireAuth();
   if (!session) return;
@@ -21,7 +39,7 @@ function renderTopbar(session) {
     </div>
     <div class="topbar-sep"></div>
     <div class="topbar-actions">
-      <button class="topbar-btn" title="Aggiorna" onclick="location.reload()">
+      <button class="topbar-btn" title="Aggiorna" id="topbar-refresh-btn" onclick="topbarRefresh(this)">
         <span class="material-symbols-rounded" style="font-size:20px">refresh</span>
       </button>
       <button class="topbar-btn" id="theme-toggle-btn" title="Cambia tema" onclick="toggleTheme()">

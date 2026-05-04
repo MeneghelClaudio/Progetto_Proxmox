@@ -144,7 +144,8 @@ const credsApi = {
 // ---------- Cluster / nodes API ----------
 
 const clusterApi = {
-  tree:     (credId)                  => apiRequest(`/api/clusters/${credId}/tree`),
+  tree:         (credId)                  => apiRequest(`/api/clusters/${credId}/tree`),
+  forceRefresh: (credId)                  => apiRequest(`/api/clusters/${credId}/tree/refresh`, { method: 'POST' }),
   allTrees: ()                        => apiRequest('/api/clusters/all'),
   status:   (credId)                  => apiRequest(`/api/clusters/${credId}/status`),
   node:     (credId, node)            => apiRequest(`/api/clusters/${credId}/nodes/${node}`),
@@ -198,6 +199,19 @@ const backupApi = {
     const q = vmid ? `?vmid=${vmid}` : '';
     return apiRequest(`/api/clusters/${credId}/backups/${node}/${storage}${q}`);
   },
+  remove: (credId, node, storage, volid)  =>
+    apiRequest(`/api/clusters/${credId}/backups/${node}/${storage}/content?volid=${encodeURIComponent(volid)}`, { method: 'DELETE' }),
+};
+
+const pbsApi = {
+  // Aggiunge un PBS come storage al server Proxmox identificato da credId
+  add: (credId, payload) => apiRequest(`/api/clusters/${credId}/pbs`, { method: 'POST', body: payload }),
+};
+
+const pvTaskApi = {
+  // Polling stato di un task Proxmox (backup/snapshot) tramite UPID
+  status: (credId, node, upid) =>
+    apiRequest(`/api/clusters/${credId}/pvetask?node=${encodeURIComponent(node)}&upid=${encodeURIComponent(upid)}`),
 };
 
 // ---------- Tasks API ----------
@@ -349,15 +363,18 @@ function normalizeTree(tree) {
     status: tree.cluster.quorate ? 'ok' : 'degraded',
   }] : [];
 
-  // Deduplicate backup targets by storage name — a shared PBS visible from
-  // multiple nodes appears once per node in cluster_resources.
+  // Deduplicate backup targets:
+  // - Storage condivisi (shared=true): deduplicati per nome (stesso disco fisico su più nodi)
+  // - Storage non condivisi (es. local): deduplicati per nodo:nome (indipendenti per nodo)
   const seenBt = new Set();
   const backupServers = (tree.backup_targets || []).reduce((acc, bt) => {
-    if (!seenBt.has(bt.storage)) {
-      seenBt.add(bt.storage);
+    const key = bt.shared ? bt.storage : `${bt.node}:${bt.storage}`;
+    if (!seenBt.has(key)) {
+      seenBt.add(key);
       acc.push({
-        id: bt.storage,           // keyed by name, not node/name
-        name: bt.storage,
+        id:   key,
+        name: bt.shared ? bt.storage : `${bt.storage} (${bt.node})`,
+        node: bt.node,
         status: 'running',
         diskTotal: bt.total ? Math.round(bt.total / (1024 ** 2)) : 0, // MB
         diskUsed:  bt.used  ? Math.round(bt.used  / (1024 ** 2)) : 0,

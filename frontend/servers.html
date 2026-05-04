@@ -317,7 +317,14 @@ async function saveServer() {
       if (!getActiveCred()) setActiveCred(s.id);
       await loadServers();
     } catch (e) {
-      showToast('Errore: ' + e.message, 'danger');
+      const msg = e.message || '';
+      if (msg.includes('Credenziali non valide') || msg.includes('401')) {
+        showToast('Credenziali non valide: verifica utente e password', 'danger');
+      } else if (msg.includes('Impossibile raggiungere')) {
+        showToast(msg, 'danger');
+      } else {
+        showToast('Errore: ' + msg, 'danger');
+      }
     }
   }
 }
@@ -329,15 +336,22 @@ function setActive(id) {
 }
 
 async function removeServer(id, name) {
-  if (!confirm(`Rimuovere il server "${name}"? Tutti i task di migrazione associati verranno eliminati.`)) return;
-  try {
-    await credsApi.remove(id);
-    if (getActiveCred() === id) setActiveCred(null);
-    showToast(`Server "${name}" rimosso`, 'warning');
-    await loadServers();
-  } catch (e) {
-    showToast('Errore: ' + e.message, 'danger');
-  }
+  confirmDelete({
+    type: 'Server Proxmox',
+    name: name,
+    description: `Stai per rimuovere "${name}" dall'app. Tutti i task di migrazione associati verranno eliminati. Il server Proxmox reale non verrà modificato.`,
+    confirmText: name,
+    onConfirm: async () => {
+      try {
+        await credsApi.remove(id);
+        if (getActiveCred() === id) setActiveCred(null);
+        showToast(`Server "${name}" rimosso`, 'warning');
+        await loadServers();
+      } catch (e) {
+        showToast('Errore: ' + e.message, 'danger');
+      }
+    },
+  });
 }
 
 // Fix 3: Creazione cluster

@@ -968,22 +968,38 @@ async function executeSnapshot() {
 async function rollbackSnap(name) {
   const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
-  if (!confirm(`Ripristinare lo snapshot "${decodeURIComponent(name)}"?`)) return;
-  try {
-    await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, decodeURIComponent(name));
-    showToast('Rollback avviato', 'info');
-  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+  const snapName = decodeURIComponent(name);
+  confirmDelete({
+    type: 'Rollback Snapshot',
+    name: snapName,
+    description: `Stai per ripristinare "${vm.name}" allo snapshot "${snapName}". Lo stato attuale della VM verrà perso.`,
+    confirmText: snapName,
+    onConfirm: async () => {
+      try {
+        await snapApi.rollback(getActiveCred(), vm.kind, vm.node, vm.id, snapName);
+        showToast('Rollback avviato', 'info');
+      } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+    },
+  });
 }
 
 async function deleteSnap(name) {
   const vm = allVMs.find(v => v.id === activeVMId);
   if (!vm) return;
-  if (!confirm(`Eliminare lo snapshot "${decodeURIComponent(name)}"?`)) return;
-  try {
-    await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, decodeURIComponent(name));
-    showToast('Snapshot eliminato', 'warning');
-    await renderDetail(vm);
-  } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+  const snapName = decodeURIComponent(name);
+  confirmDelete({
+    type: 'Snapshot',
+    name: snapName,
+    description: `Stai per eliminare lo snapshot "${snapName}" dalla VM "${vm.name}". L'operazione è irreversibile.`,
+    confirmText: snapName,
+    onConfirm: async () => {
+      try {
+        await snapApi.remove(getActiveCred(), vm.kind, vm.node, vm.id, snapName);
+        showToast('Snapshot eliminato', 'warning');
+        await renderDetail(vm);
+      } catch (e) { showToast('Errore: ' + e.message, 'danger'); }
+    },
+  });
 }
 
 // Crea VM/CT — modal con risorse caricate da /resources

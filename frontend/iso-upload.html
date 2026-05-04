@@ -344,18 +344,25 @@ async function onFileSelected(file) {
 }
 
 async function deleteFile(volid) {
-  const name = volid.split('/').pop();
-  if (!confirm(`Eliminare "${name}" dallo storage?\nQuesta operazione è irreversibile.`)) return;
+  const name    = volid.split('/').pop();
   const node    = document.getElementById('sel-node').value;
   const storage = document.getElementById('sel-storage').value;
   const credId  = getActiveCred();
-  try {
-    await isoApi.delete(credId, node, storage, volid);
-    showToast(`File eliminato: ${name}`, 'success');
-    await loadIsoList();
-  } catch (e) {
-    showToast(`Errore eliminazione: ${e.message}`, 'danger');
-  }
+  confirmDelete({
+    type: 'File / ISO',
+    name: name,
+    description: `Stai per eliminare "${name}" dallo storage "${storage}" sul nodo "${node}". L'operazione è irreversibile.`,
+    confirmText: name,
+    onConfirm: async () => {
+      try {
+        await isoApi.delete(credId, node, storage, volid);
+        showToast(`File eliminato: ${name}`, 'success');
+        await loadIsoList();
+      } catch (e) {
+        showToast(`Errore eliminazione: ${e.message}`, 'danger');
+      }
+    },
+  });
 }
 
 function escapeHtml(s) {

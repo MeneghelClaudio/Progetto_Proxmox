@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List
+import urllib3
+
+from proxmoxer import ProxmoxAPI
 
 from ..database import get_db
 from ..auth import get_current_user
@@ -10,6 +13,31 @@ from ..crypto import encrypt_password
 
 
 router = APIRouter(prefix="/api/credentials", tags=["credentials"])
+
+
+def _test_proxmox_connection(payload: CredentialIn) -> None:
+    """
+    Tenta una connessione di prova al server Proxmox con le credenziali fornite.
+    Lancia HTTPException se le credenziali sono errate o il server non è raggiungibile.
+    """
+    if not payload.verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    try:
+        px = ProxmoxAPI(
+            host=f"{payload.host}:{payload.port}",
+            user=f"{payload.pve_username}@{payload.pve_realm}",
+            password=payload.password,
+            verify_ssl=payload.verify_ssl,
+            timeout=8,
+        )
+        # Una semplice chiamata per forzare l'autenticazione
+        px.version.get()
+    except Exception as exc:
+        msg = str(exc).lower()
+        if any(k in msg for k in ("401", "unauthorized", "authentication", "permission")):
+            raise HTTPException(401, "Credenziali non valide: utente o password errati")
+        # Errori di rete / host non raggiungibile
+        raise HTTPException(400, f"Impossibile raggiungere il server Proxmox: {exc}")
 
 
 @router.get("", response_model=List[CredentialOut])
@@ -26,6 +54,9 @@ def create_credential(
     # Only admin and senior can add Proxmox servers
     if user.role not in ("admin", "senior"):
         raise HTTPException(403, "Admin or senior required to add servers")
+
+    # Verifica le credenziali prima di salvarle
+    _test_proxmox_connection(payload)
 
     cred = ProxmoxCredential(
         user_id=user.id,

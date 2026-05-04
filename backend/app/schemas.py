@@ -238,6 +238,17 @@ class ClusterDestroyIn(BaseModel):
     node_cred_ids: list[int] = []
 
 
+class PBSAddIn(BaseModel):
+    storage_id:  str             # nome/ID dello storage in PVE (es. "pbs-main")
+    server:      str             # IP/hostname del PBS
+    port:        int   = 8007
+    datastore:   str             # nome datastore PBS
+    username:    str             # utente PBS (es. admin@pbs)
+    password:    str
+    fingerprint: str                     # SHA-256 fingerprint del certificato PBS (obbligatorio)
+    shared:      bool  = True    # visibile su tutti i nodi del cluster
+
+
 class VMConfigUpdateIn(BaseModel):
     cores:       Optional[int]   = Field(default=None, ge=1, le=512)
     sockets:     Optional[int]   = Field(default=None, ge=1, le=8)

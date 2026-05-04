@@ -161,16 +161,66 @@ def _build_tree(px) -> dict:
             if r.get("content") and "backup" in (r.get("content") or ""):
                 backup_targets.append(storage_obj)
 
-    # Deduplicate backup_targets by storage name.
-    # A shared PBS storage appears once per cluster node in cluster_resources,
-    # but it is the same physical target — keep only one entry per storage name.
+    # Deduplicate backup_targets:
+    # - Shared storages (shared=True) are the same physical target on every node
+    #   → keep only one entry per storage name.
+    # - Non-shared storages (e.g. local) are independent per node
+    #   → keep one entry per (node, storage) pair.
     seen_bt: set[str] = set()
     unique_backup_targets: list[dict] = []
     for bt in backup_targets:
-        key = bt["storage"]
+        key = bt["storage"] if bt.get("shared") else f"{bt['node']}:{bt['storage']}"
         if key not in seen_bt:
             seen_bt.add(key)
             unique_backup_targets.append(bt)
+
+    # Fix disk usage for backup storage targets.
+    #
+    # cluster/resources returns disk=0 for PBS (Proxmox VE never queries the
+    # remote PBS daemon during that call).  We use two strategies per storage:
+    #
+    #   PBS (plugintype=pbs):
+    #     Skip /storage/status (always 0 for PBS) and go straight to summing
+    #     the "size" fields of all backup content entries — this is the same
+    #     data shown in the "Backup disponibili" table, so it is always accurate.
+    #
+    #   Other storages (local, dir, …):
+    #     Try /storage/status first (fast, usually accurate). Fall back to
+    #     content sum only when that also returns 0.
+    def _fetch_storage_status(bt: dict) -> None:
+        node      = bt["node"]
+        storage   = bt["storage"]
+        is_pbs    = (bt.get("plugintype") or "").lower() == "pbs"
+
+        if not is_pbs:
+            # Strategy 1 — works for local/dir/nfs storages
+            try:
+                st    = px.nodes(node).storage(storage).status.get()
+                used  = int(st.get("used",  0) or 0)
+                total = int(st.get("total", 0) or 0)
+                if used > 0:
+                    bt["used"]  = used
+                    bt["total"] = total or bt.get("total") or 0
+                    return
+                if total > 0:
+                    bt["total"] = total
+            except Exception:
+                pass
+
+        # Strategy 2 — sum content sizes (always for PBS, fallback for others)
+        try:
+            items    = px.nodes(node).storage(storage).content.get(content="backup") or []
+            used_sum = sum(int(item.get("size", 0) or 0) for item in items)
+            if used_sum > 0:
+                bt["used"] = used_sum
+                if not bt.get("total"):
+                    bt["total"] = bt["used"]
+        except Exception:
+            pass   # leave zeros; better than breaking the whole tree
+
+    if unique_backup_targets:
+        with ThreadPoolExecutor(max_workers=min(len(unique_backup_targets), 8)) as ex:
+            list(ex.map(_fetch_storage_status, unique_backup_targets))
 
     return {
         "cluster":        cluster_info,
@@ -265,6 +315,30 @@ def get_all_trees(
 def revision(user: User = Depends(get_current_user)):
     """Returns the current global revision counter."""
     return {"rev": get_revision()}
+
+
+@router.post("/{cred_id}/tree/refresh", status_code=200)
+def force_refresh_tree(
+    cred_id: int,
+    db:   Session = Depends(get_db),
+    user: User    = Depends(get_current_user),
+):
+    """
+    Invalida la cache del tree per questa credenziale e la ricostruisce subito.
+    Usato dal bottone Refresh del topbar per garantire dati sempre aggiornati.
+    """
+    cred = _get_cred(db, user, cred_id)
+    # Svuota cache esistente
+    from ..state import invalidate_tree
+    invalidate_tree(cred_id)
+    # Ricostruisce subito (sincrono)
+    try:
+        px   = build_client(cred)
+        tree = _build_tree(px)
+        set_cached_tree(user.id, cred_id, tree)
+        return {"refreshed": True, "cred_id": cred_id}
+    except Exception as e:
+        raise HTTPException(502, f"Refresh fallito: {e}")
 
 
 @router.get("/{cred_id}/tree")
