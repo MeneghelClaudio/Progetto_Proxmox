@@ -137,59 +137,82 @@ function renderSidebarTree(activePage, session) {
     return;
   }
 
-  let html = '';
+  // Deduplica cluster per nome: se più credenziali puntano allo stesso cluster PVE
+  // (es. 3 nodi dello stesso cluster registrati separatamente), mostrarlo una volta sola.
+  // Usa la credenziale attiva come fonte dati se disponibile, altrimenti la prima trovata.
+  const clusterMap = new Map(); // clusterName → { server, data, cluster }
+  const standaloneMap = new Map(); // nodeId → { node, server, data }
+  const offlineServers = [];
 
-  all.forEach((server, si) => {
-    const sid = `tree-srv-${si}`;
-    const isActive = server.cred_id === activeId;
-    const dotColor = server.online ? 'var(--success)' : 'var(--danger)';
-    const headerStyle = isActive ? 'background:var(--bg-hover);border-left:2px solid var(--accent)' : '';
+  all.forEach(server => {
+    if (!server.online) {
+      offlineServers.push(server);
+      return;
+    }
     const data = server.tree;
-    const totalVms = (data.vms || []).length;
+    const clusters = data.clusters || [];
+    const clusterNodeIds = new Set(clusters.flatMap(c => c.nodes));
+
+    clusters.forEach(cluster => {
+      const existing = clusterMap.get(cluster.name);
+      // Preferisci la credenziale attiva, altrimenti tieni la prima trovata
+      if (!existing || server.cred_id === activeId) {
+        clusterMap.set(cluster.name, { server, data, cluster });
+      }
+    });
+
+    // Nodi standalone (non in alcun cluster), deduplicati per ID
+    (data.nodes || []).filter(n => !clusterNodeIds.has(n.id)).forEach(node => {
+      if (!standaloneMap.has(node.id)) {
+        standaloneMap.set(node.id, { node, server, data });
+      }
+    });
+  });
+
+  let html = '';
+  let idx = 0;
+
+  // 1. Cluster come livello radice (uno per nome, anche se ci sono più credenziali)
+  clusterMap.forEach(({ server, data, cluster }) => {
+    const credId = server.cred_id;
+    const isActive = credId === activeId;
+    const cid = `tree-cl-${idx++}`;
+    const clusterNodes = (data.nodes || []).filter(n => cluster.nodes.includes(n.id));
+    const clusterStyle = isActive ? 'background:var(--bg-hover);border-left:2px solid var(--accent)' : '';
 
     html += `
-      <div class="tree-item" style="cursor:pointer;user-select:none;${headerStyle}" onclick="toggleTree('${sid}'); selectActiveCred(${server.cred_id})">
-        <span class="tree-expand" id="${sid}-arrow"><span class="material-symbols-rounded" style="font-size:14px;transition:transform .15s">expand_more</span></span>
-        <span class="material-symbols-rounded ti-icon" style="color:${dotColor}">dns</span>
-        <span class="ti-label" title="${escapeHtml(server.host)}">${escapeHtml(server.cred_name)}</span>
-        <span class="ti-badge">${server.online ? totalVms : 'off'}</span>
+      <div class="tree-item" style="cursor:pointer;user-select:none;${clusterStyle}"
+           onclick="toggleTree('${cid}');selectActiveCred(${credId})"
+           title="${escapeHtml(server.cred_name)} — ${escapeHtml(server.host)}">
+        <span class="tree-expand" id="${cid}-arrow">
+          <span class="material-symbols-rounded" style="font-size:14px;transition:transform .15s">expand_more</span>
+        </span>
+        <span class="material-symbols-rounded ti-icon" style="color:var(--info)">hub</span>
+        <span class="ti-label">${escapeHtml(cluster.name)}</span>
+        <span class="ti-badge">${clusterNodes.length}</span>
       </div>
-      <div id="${sid}" class="tree-cluster-children">`;
-
-    if (!server.online) {
-      html += `<div class="tree-item l1" style="color:var(--text-dim);font-size:11px;font-style:italic">
-        <span class="tree-expand"></span>
-        <span class="material-symbols-rounded ti-icon" style="color:var(--danger);font-size:14px">cloud_off</span>
-        <span class="ti-label">Server offline</span>
-      </div>`;
-    } else {
-      // Native PVE cluster (if any) is shown as a sub-header
-      (data.clusters || []).forEach((cluster, ci) => {
-        const cid = `${sid}-cl-${ci}`;
-        const clusterNodes = data.nodes.filter(n => cluster.nodes.includes(n.id));
-        html += `
-          <div class="tree-item l1" style="cursor:pointer;user-select:none" onclick="event.stopPropagation();toggleTree('${cid}')">
-            <span class="tree-expand" id="${cid}-arrow"><span class="material-symbols-rounded" style="font-size:14px;transition:transform .15s">expand_more</span></span>
-            <span class="material-symbols-rounded ti-icon" style="color:var(--info)">hub</span>
-            <span class="ti-label">${escapeHtml(cluster.name)}</span>
-            <span class="ti-badge">${clusterNodes.length}</span>
-          </div>
-          <div id="${cid}" class="tree-node-children">`;
-        clusterNodes.forEach((node, ni) => {
-          html += renderNodeBranch(`${cid}-nd-${ni}`, node, data, server.cred_id, 'l2');
-        });
-        html += `</div>`;
-      });
-
-      // Standalone nodes (not in any cluster)
-      const clusterNodeIds = new Set((data.clusters || []).flatMap(c => c.nodes));
-      const standaloneNodes = (data.nodes || []).filter(n => !clusterNodeIds.has(n.id));
-      standaloneNodes.forEach((node, ni) => {
-        html += renderNodeBranch(`${sid}-sa-${ni}`, node, data, server.cred_id, 'l1');
-      });
-    }
-
+      <div id="${cid}" class="tree-cluster-children">`;
+    clusterNodes.forEach((node, ni) => {
+      html += renderNodeBranch(`${cid}-nd-${ni}`, node, data, credId, 'l1');
+    });
     html += `</div>`;
+  });
+
+  // 2. Nodi standalone come livello radice (deduplicati per ID)
+  let saIdx = 0;
+  standaloneMap.forEach(({ node, server, data }) => {
+    html += renderNodeBranch(`tree-sa-${saIdx++}`, node, data, server.cred_id, '');
+  });
+
+  // 3. Server offline
+  offlineServers.forEach(server => {
+    html += `
+      <div class="tree-item" style="cursor:default;" title="${escapeHtml(server.host)}">
+        <span class="tree-expand"></span>
+        <span class="material-symbols-rounded ti-icon" style="color:var(--danger)">cloud_off</span>
+        <span class="ti-label">${escapeHtml(server.cred_name)}</span>
+        <span class="ti-badge">off</span>
+      </div>`;
   });
 
   el.innerHTML = html;
@@ -197,8 +220,12 @@ function renderSidebarTree(activePage, session) {
 
 function renderNodeBranch(nid, node, data, credId, levelClass) {
   const nodeVMs = data.vms.filter(v => v.node === node.id);
+  // Calcola il livello delle VM in base al livello del nodo
+  const vmLevel = !levelClass ? 'l1' : (levelClass === 'l1' ? 'l2' : 'l3');
+  const itemClass = levelClass ? `tree-item ${levelClass}` : 'tree-item';
+
   let html = `
-    <div class="tree-item ${levelClass}" style="cursor:pointer;user-select:none" onclick="event.stopPropagation();toggleTree('${nid}')">
+    <div class="${itemClass}" style="cursor:pointer;user-select:none" onclick="event.stopPropagation();toggleTree('${nid}')">
       <span class="tree-expand" id="${nid}-arrow"><span class="material-symbols-rounded" style="font-size:14px;transition:transform .15s">expand_more</span></span>
       <span class="material-symbols-rounded ti-icon" style="color:${node.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">storage</span>
       <span class="ti-label"><a href="node-detail.html?cred=${credId}&id=${encodeURIComponent(node.id)}" style="color:inherit;text-decoration:none" onclick="event.stopPropagation();selectActiveCred(${credId})">${escapeHtml(node.name)}</a></span>
@@ -206,7 +233,7 @@ function renderNodeBranch(nid, node, data, credId, levelClass) {
     </div>
     <div id="${nid}" class="tree-node-children">`;
   nodeVMs.forEach(vm => {
-    html += `<a href="vm-detail.html?cred=${credId}&id=${vm.id}" class="tree-item ${levelClass === 'l1' ? 'l2' : 'l3'}" onclick="event.stopPropagation();selectActiveCred(${credId})">
+    html += `<a href="vm-detail.html?cred=${credId}&id=${vm.id}" class="tree-item ${vmLevel}" onclick="event.stopPropagation();selectActiveCred(${credId})">
       <span class="tree-expand"></span>
       <span class="material-symbols-rounded ti-icon" style="color:${vm.status === 'running' ? 'var(--success)' : 'var(--text-dim)'}">${vm.type === 'vm' ? 'computer' : 'deployed_code'}</span>
       <span class="ti-label">${escapeHtml(vm.name)}</span>
