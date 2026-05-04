@@ -267,6 +267,98 @@ function _isCacheStale() {
   return !ALL_CLUSTERS || (Date.now() - _allClustersTs > ALL_CLUSTERS_TTL);
 }
 
+// ---------- Proxmox error parser ----------
+
+const PROXMOX_ERROR_HINTS = [
+  {
+    pattern: /rbd.*lock|lock.*timed out|storage.*locked/i,
+    icon: 'lock',
+    label: 'Storage Ceph bloccato (RBD lock)',
+    msg: 'Un\'operazione precedente ha lasciato un lock attivo sul pool Ceph. Il comando è andato in timeout perché lo storage è occupato.',
+    steps: [
+      'Apri una shell su un nodo Proxmox del cluster.',
+      'Elenca i lock attivi: rbd lock list <immagine> --pool <pool>',
+      'Rimuovi il lock: rbd lock remove <pool>/<img> <lock-id> <locker>',
+      'Verifica la salute del cluster: ceph status',
+      'Se la VM è stata creata a metà, eliminala prima di riprovare: qm destroy <vmid>',
+    ],
+  },
+  {
+    pattern: /task already running|already running/i,
+    icon: 'pending',
+    label: 'Task già in esecuzione',
+    msg: 'C\'è già un task attivo su questa VM/CT. Attendi che termini prima di inviare un nuovo comando.',
+    steps: [
+      'Controlla i task attivi nel pannello "Tasks" in basso a destra.',
+      'Aspetta il completamento oppure annulla il task precedente da Proxmox.',
+    ],
+  },
+  {
+    pattern: /no space left|storage.*full|disk.*full|ENOSPC/i,
+    icon: 'storage',
+    label: 'Storage pieno',
+    msg: 'Lo storage di destinazione non ha spazio sufficiente per completare l\'operazione.',
+    steps: [
+      'Verifica lo spazio disponibile sugli storage dal pannello Cluster.',
+      'Elimina snapshot o backup obsoleti per liberare spazio.',
+      'Scegli uno storage diverso se disponibile.',
+    ],
+  },
+  {
+    pattern: /connection refused|connection timed out|cannot connect|host is down/i,
+    icon: 'wifi_off',
+    label: 'Nodo Proxmox non raggiungibile',
+    msg: 'Il nodo Proxmox non risponde. Potrebbe essere offline o irraggiungibile dalla rete.',
+    steps: [
+      'Verifica che il nodo sia acceso e raggiungibile (ping).',
+      'Controlla le credenziali configurate nella pagina Server.',
+      'Verifica che il servizio pveproxy sia attivo sul nodo: systemctl status pveproxy',
+    ],
+  },
+  {
+    pattern: /permission denied|not authorized|403|unauthorized/i,
+    icon: 'block',
+    label: 'Permessi insufficienti',
+    msg: 'L\'utente o il token API non ha i permessi necessari per eseguire questa operazione.',
+    steps: [
+      'Verifica il ruolo assegnato all\'utente/token API su Proxmox (minimo PVEAdmin o Administrator).',
+      'Aggiorna le credenziali nella pagina Server se necessario.',
+    ],
+  },
+  {
+    pattern: /vmid.*already exists|already exists/i,
+    icon: 'content_copy',
+    label: 'VMID già in uso',
+    msg: 'Il VMID scelto è già assegnato a un\'altra VM o CT sul cluster.',
+    steps: [
+      'Scegli un VMID diverso (usa il suggerimento automatico nella form di creazione).',
+    ],
+  },
+  {
+    pattern: /timeout|timed out/i,
+    icon: 'timer_off',
+    label: 'Timeout operazione',
+    msg: 'L\'operazione ha impiegato troppo tempo e Proxmox l\'ha interrotta.',
+    steps: [
+      'Verifica la salute del cluster Ceph o del datastore: ceph status',
+      'Controlla che tutti i nodi siano online e sincronizzati.',
+      'Riprova l\'operazione; se il problema persiste controlla i log di Proxmox: journalctl -u pvedaemon',
+    ],
+  },
+];
+
+/**
+ * Riceve il messaggio grezzo di errore Proxmox e restituisce un oggetto
+ * { icon, label, friendly, steps } se trovato, altrimenti null.
+ */
+function parseProxmoxError(rawMsg) {
+  if (!rawMsg) return null;
+  for (const hint of PROXMOX_ERROR_HINTS) {
+    if (hint.pattern.test(rawMsg)) return hint;
+  }
+  return null;
+}
+
 // ---------- Error modal (Proxmox-style detailed error) ----------
 
 function showErrorModal(title, msg, detail) {
@@ -301,13 +393,38 @@ function showErrorModal(title, msg, detail) {
     document.body.appendChild(modal);
   }
   document.getElementById('pmx-error-title').textContent = title || 'Errore';
-  document.getElementById('pmx-error-msg').textContent = msg || '';
+
+  // Prova a riconoscere l'errore e mostrare un messaggio arricchito
+  const rawText = (typeof detail === 'string' ? detail : '') || msg || '';
+  const hint = parseProxmoxError(rawText);
+  const msgEl = document.getElementById('pmx-error-msg');
+
+  if (hint) {
+    const stepsHtml = hint.steps.map((s, i) =>
+      `<li style="margin-bottom:4px"><span style="color:var(--text-muted);margin-right:6px">${i + 1}.</span>${s}</li>`
+    ).join('');
+    msgEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span class="material-symbols-rounded" style="color:var(--warning);font-size:20px">${hint.icon}</span>
+        <strong style="font-size:13px">${hint.label}</strong>
+      </div>
+      <p style="margin:0 0 10px;font-size:13px;line-height:1.5">${hint.msg}</p>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;font-size:12px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:8px">Come risolvere</div>
+        <ol style="margin:0;padding-left:0;list-style:none">${stepsHtml}</ol>
+      </div>`;
+  } else {
+    msgEl.textContent = msg || '';
+  }
+
   const detEl = document.getElementById('pmx-error-detail');
   const detWrap = document.getElementById('pmx-error-details-wrap');
-  if (detail) {
-    detEl.textContent = typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2);
+  // Mostra sempre il dettaglio tecnico grezzo in fondo (collassato se c'è un hint, aperto altrimenti)
+  const rawDetail = detail || msg || '';
+  if (rawDetail) {
+    detEl.textContent = typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail, null, 2);
     detWrap.style.display = '';
-    detWrap.open = true;
+    detWrap.open = !hint; // collassato se c'è già il messaggio amichevole
   } else {
     detWrap.style.display = 'none';
   }
