@@ -183,7 +183,6 @@ async function doRefresh() {
 // Merge all per-server trees into one DATA object.
 // Nodes/VMs carry server_id to avoid ID collisions across servers.
 function aggregateAll(allSrv) {
-  const vms = [];
   const backupMap = new Map(); // storage name → entry (deduplicato)
 
   // ── Nodi: deduplicazione per nome (case-insensitive) ──────────────────────
@@ -191,6 +190,10 @@ function aggregateAll(allSrv) {
   // Quando lo stesso nodo appare in più alberi (es. cluster con più credenziali)
   // preferiamo l'entry marcata local=true, che ha le statistiche reali dirette.
   const nodeMap = new Map(); // name.lower → entry
+
+  // ── VM/CT: deduplicazione per node:vmid ───────────────────────────────────
+  // Stesso cluster visto da 3 credenziali → stesse VM triplicate senza deduplica.
+  const vmMap = new Map(); // `node:vmid` → entry
 
   allSrv.forEach(srv => {
     if (!srv.tree) return;
@@ -205,7 +208,10 @@ function aggregateAll(allSrv) {
       }
     });
 
-    srv.tree.vms.forEach(v => vms.push({ ...v, server_id: srv.cred_id }));
+    srv.tree.vms.forEach(v => {
+      const key = `${v.node}:${v.id}`;
+      if (!vmMap.has(key)) vmMap.set(key, { ...v, server_id: srv.cred_id });
+    });
     srv.tree.backupServers.forEach(b => {
       // Deduplica per nome: stesso PBS condiviso tra più credenziali → una sola card
       if (!backupMap.has(b.name)) backupMap.set(b.name, { ...b, server_name: srv.cred_name });
@@ -213,6 +219,7 @@ function aggregateAll(allSrv) {
   });
 
   const nodes = Array.from(nodeMap.values());
+  const vms   = Array.from(vmMap.values());
 
   // ── Cluster: deduplicazione per nome ──────────────────────────────────────
   // Se lo stesso cluster Proxmox (stesso nome) appare in più alberi di credenziali

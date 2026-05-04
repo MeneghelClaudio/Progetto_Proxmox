@@ -1,42 +1,21 @@
 services:
-  db:
-    image: mariadb:11
-    container_name: pmx_db
-    restart: unless-stopped
-    environment:
-      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpass}
-      MARIADB_DATABASE: ${DB_NAME:-proxmox_manager}
-      MARIADB_USER: ${DB_USER:-pmxuser}
-      MARIADB_PASSWORD: ${DB_PASSWORD:-pmxpass}
-    volumes:
-      - db_data:/var/lib/mysql
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    networks:
-      - pmx_net
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   backend:
     build: ./backend
     container_name: pmx_backend
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     environment:
-      DB_HOST: db
-      DB_PORT: 3306
-      DB_NAME: ${DB_NAME:-proxmox_manager}
-      DB_USER: ${DB_USER:-pmxuser}
-      DB_PASSWORD: ${DB_PASSWORD:-pmxpass}
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-please}
-      FERNET_KEY: ${FERNET_KEY:-}   # if empty, generated at startup and persisted in /data/fernet.key
+      # ── AWS Secrets Manager ─────────────────────────────────────────────────
+      # DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET, FERNET_KEY
+      # are loaded automatically from the secret at startup.
+      AWS_REGION:            ${AWS_REGION}
+      AWS_SECRET_NAME:       ${AWS_SECRET_NAME}
+      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+
+      # ── Non-sensitive config ────────────────────────────────────────────────
       CORS_ORIGINS: "*"
     volumes:
-      - backend_data:/data
+      - backend_data:/data    # only needed if FERNET_KEY is NOT in Secrets Manager
     networks:
       - pmx_net
     expose:
@@ -58,5 +37,4 @@ networks:
     driver: bridge
 
 volumes:
-  db_data:
   backend_data:
