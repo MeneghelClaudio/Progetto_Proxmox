@@ -61,7 +61,14 @@ class CredentialIn(BaseModel):
     port: int = 8006
     pve_username: str
     pve_realm: str = "pam"
-    password: str           # plaintext on the wire (HTTPS) - encrypted at rest
+    # Auth: fornire ALMENO uno dei due metodi.
+    # - password: autenticazione classica username/password
+    # - token_name + token_value: API Token Proxmox
+    #   (formato Proxmox: PVEAPIToken=user@realm!token_name=token_value)
+    # Se entrambi presenti, le API usano il token; la password resta per operazioni SSH.
+    password:    Optional[str] = None
+    token_name:  Optional[str] = Field(default=None, max_length=128)
+    token_value: Optional[str] = None
     verify_ssl: bool = False
 
 
@@ -71,7 +78,9 @@ class CredentialUpdate(BaseModel):
     port: Optional[int] = None
     pve_username: Optional[str] = None
     pve_realm: Optional[str] = None
-    password: Optional[str] = None
+    password:    Optional[str] = None
+    token_name:  Optional[str] = Field(default=None, max_length=128)
+    token_value: Optional[str] = None
     verify_ssl: Optional[bool] = None
 
 
@@ -84,6 +93,10 @@ class CredentialOut(BaseModel):
     pve_realm: str
     verify_ssl: bool
     created_at: datetime
+    # Info autenticazione (i valori segreti non vengono mai esposti)
+    auth_method:  str             # "token" | "password" | "both"
+    token_name:   Optional[str] = None
+    has_password: bool
 
     class Config:
         from_attributes = True

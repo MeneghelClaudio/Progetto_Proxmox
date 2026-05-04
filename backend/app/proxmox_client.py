@@ -28,50 +28,71 @@ _client_lock = threading.Lock()
 CLIENT_TTL = 270.0  # seconds (Proxmox tickets last 2 h; we refresh well before)
 
 
-def build_client(cred: ProxmoxCredential,
-                 timeout: Optional[float] = None) -> ProxmoxAPI:
-    """Return a cached (or freshly-created) ProxmoxAPI client.
-
-    timeout=None  → use the shared cached client (8 s socket timeout, fine for
-                    normal API calls; re-used across requests to avoid the auth
-                    round-trip on every call).
-    timeout=<n>   → create a *fresh*, non-cached client with that socket
-                    timeout (seconds).  Use this for long-running operations
-                    such as large-file uploads where 8 s is far too short.
+def _make_proxmox_client(cred: ProxmoxCredential, timeout: float) -> ProxmoxAPI:
     """
-    if timeout is not None:
-        # Non-cached client — each call authenticates fresh, caller owns it.
-        if not cred.verify_ssl:
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        password = decrypt_password(cred.encrypted_password)
+    Costruisce un ProxmoxAPI scegliendo il metodo di autenticazione:
+
+    • API Token  (priorità) — usato quando token_name + encrypted_token_value sono
+      valorizzati.  Ogni richiesta porta il token nell'header Authorization;
+      non serve un ticket HTTP separato.  Raccomandato per produzione.
+      Formato Proxmox: PVEAPIToken=<user>@<realm>!<token_name>=<token_value>
+
+    • Password   (fallback) — usato se il token non è configurato.
+    """
+    if not cred.verify_ssl:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    user = f"{cred.pve_username}@{cred.pve_realm}"
+    host = f"{cred.host}:{cred.port}"
+
+    # ── API Token (metodo preferito) ──────────────────────────────────────────
+    if cred.token_name and cred.encrypted_token_value:
+        token_value = decrypt_password(cred.encrypted_token_value)
         return ProxmoxAPI(
-            host=f"{cred.host}:{cred.port}",
-            user=f"{cred.pve_username}@{cred.pve_realm}",
-            password=password,
+            host=host,
+            user=user,
+            token_name=cred.token_name,
+            token_value=token_value,
             verify_ssl=cred.verify_ssl,
             timeout=timeout,
         )
 
-    # ── Normal cached path ────────────────────────────────────────────────────
+    # ── Password (fallback) ───────────────────────────────────────────────────
+    if not cred.encrypted_password:
+        raise ValueError(
+            f"Credenziale '{cred.name}': nessun metodo di autenticazione "
+            "configurato (né API token né password)."
+        )
+    password = decrypt_password(cred.encrypted_password)
+    return ProxmoxAPI(
+        host=host,
+        user=user,
+        password=password,
+        verify_ssl=cred.verify_ssl,
+        timeout=timeout,
+    )
+
+
+def build_client(cred: ProxmoxCredential,
+                 timeout: Optional[float] = None) -> ProxmoxAPI:
+    """Return a cached (or freshly-created) ProxmoxAPI client.
+
+    timeout=None  → usa il client condiviso in cache (socket timeout 8 s).
+                    Riutilizzato tra richieste per evitare il round-trip di auth.
+    timeout=<n>   → crea un client fresco non in cache con quel timeout.
+                    Da usare per operazioni lunghe (es. upload ISO).
+    """
+    if timeout is not None:
+        return _make_proxmox_client(cred, timeout)
+
+    # ── Cached path ───────────────────────────────────────────────────────────
     now = time.monotonic()
     with _client_lock:
         entry = _client_cache.get(cred.id)
         if entry and (now - entry[1]) < CLIENT_TTL:
             return entry[0]
 
-    if not cred.verify_ssl:
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    password = decrypt_password(cred.encrypted_password)
-    user = f"{cred.pve_username}@{cred.pve_realm}"
-
-    client = ProxmoxAPI(
-        host=f"{cred.host}:{cred.port}",
-        user=user,
-        password=password,
-        verify_ssl=cred.verify_ssl,
-        timeout=8,
-    )
+    client = _make_proxmox_client(cred, timeout=8)
     with _client_lock:
         _client_cache[cred.id] = (client, now)
     return client

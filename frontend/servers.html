@@ -26,6 +26,22 @@
 .server-host { font-size:12px; color:var(--text-muted); font-family:var(--mono); }
 .server-meta { font-size:11px; color:var(--text-dim); margin-top:2px; }
 
+.auth-badge {
+  display:inline-flex; align-items:center; gap:4px;
+  border-radius:20px; padding:2px 8px;
+  font-size:10px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+}
+.auth-badge.token   { background:var(--success-dim); border:1px solid var(--success); color:var(--success); }
+.auth-badge.password{ background:var(--warning-dim); border:1px solid var(--warning); color:var(--warning); }
+.auth-badge.both    { background:var(--info-dim);    border:1px solid var(--info);    color:var(--info); }
+
+/* Auth toggle tabs */
+.auth-tabs { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; margin-bottom:14px; }
+.auth-tab  { flex:1; padding:8px 0; font-size:12px; font-weight:600; text-align:center;
+             cursor:pointer; background:var(--surface2); color:var(--text-muted);
+             border:none; transition:background .15s,color .15s; }
+.auth-tab.active { background:var(--accent); color:#fff; }
+
 .cluster-badge {
   display:inline-flex; align-items:center; gap:6px;
   background:var(--info-dim); border:1px solid var(--info);
@@ -64,7 +80,7 @@
           <span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">dns</span>
           Aggiungi server Proxmox
         </div>
-        <div class="modal-sub">Le credenziali sono criptate (Fernet) prima di essere salvate nel database.</div>
+        <div class="modal-sub">Le credenziali vengono cifrate (Fernet AES-128) prima di essere salvate nel database.</div>
 
         <div class="form-group">
           <label class="form-label">Nome amichevole</label>
@@ -93,15 +109,65 @@
             </select>
           </div>
         </div>
-        <div class="form-group" id="srv-pass-group">
-          <label class="form-label">Password <span id="srv-pass-hint" style="color:var(--text-dim);font-weight:400">(lascia vuoto per non modificare)</span></label>
-          <div style="position:relative;display:block">
-            <input type="password" class="form-input" id="srv-pass" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding-right:44px" />
-            <button type="button" id="srv-eye" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px;line-height:0">
-              <span class="material-symbols-rounded" id="srv-eye-icon" style="font-size:18px;pointer-events:none">visibility</span>
+
+        <!-- Auth method tabs -->
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">Metodo di autenticazione</label>
+          <div class="auth-tabs">
+            <button class="auth-tab active" id="tab-token" type="button" onclick="switchAuthTab('token')">
+              <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px">key</span>API Token
+            </button>
+            <button class="auth-tab" id="tab-password" type="button" onclick="switchAuthTab('password')">
+              <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px">lock</span>Password
+            </button>
+            <button class="auth-tab" id="tab-both" type="button" onclick="switchAuthTab('both')">
+              <span class="material-symbols-rounded" style="font-size:14px;vertical-align:middle;margin-right:4px">key_vertical</span>Entrambi
             </button>
           </div>
         </div>
+
+        <!-- Token fields -->
+        <div id="srv-token-section">
+          <div class="grid-2" style="margin-top:10px">
+            <div class="form-group">
+              <label class="form-label">Token ID <span style="color:var(--text-dim);font-weight:400;font-size:11px">es. mytoken</span></label>
+              <input type="text" class="form-input" id="srv-token-name" placeholder="mytoken" autocomplete="off" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Token Secret <span id="srv-token-hint" style="color:var(--text-dim);font-weight:400;font-size:11px"></span></label>
+              <div style="position:relative;display:block">
+                <input type="password" class="form-input" id="srv-token-value" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" style="width:100%;box-sizing:border-box;padding-right:44px" autocomplete="off" />
+                <button type="button" id="srv-token-eye" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px;line-height:0">
+                  <span class="material-symbols-rounded" id="srv-token-eye-icon" style="font-size:18px;pointer-events:none">visibility</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:var(--text-dim);margin-bottom:12px;line-height:1.5">
+            Formato Proxmox: <code style="font-family:var(--mono);font-size:11px">PVEAPIToken=<em>utente</em>@<em>realm</em>!<em>tokenid</em>=<em>secret</em></code><br>
+            Crea il token su Proxmox → Datacenter → Permissions → API Tokens.
+          </div>
+        </div>
+
+        <!-- Password field -->
+        <div id="srv-pass-section" class="hidden">
+          <div class="form-group" style="margin-top:10px">
+            <label class="form-label">Password <span id="srv-pass-hint" style="color:var(--text-dim);font-weight:400">(lascia vuoto per non modificare)</span></label>
+            <div style="position:relative;display:block">
+              <input type="password" class="form-input" id="srv-pass" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding-right:44px" />
+              <button type="button" id="srv-eye" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-dim);display:flex;align-items:center;z-index:3;padding:4px;line-height:0">
+                <span class="material-symbols-rounded" id="srv-eye-icon" style="font-size:18px;pointer-events:none">visibility</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SSH password note (shown in "both" mode) -->
+        <div id="srv-ssh-note" class="hidden" style="font-size:11px;color:var(--text-dim);background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:12px;line-height:1.5">
+          <span class="material-symbols-rounded" style="font-size:13px;vertical-align:middle;color:var(--warning)">info</span>
+          La <strong>password</strong> è necessaria solo per operazioni SSH sul cluster (join/leave/crea cluster). Le API Proxmox useranno sempre il token.
+        </div>
+
         <div class="form-group">
           <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
             <input type="checkbox" id="srv-ssl" />
@@ -118,7 +184,7 @@
       </div>
     </div>
 
-    <!-- Modal: create cluster (raggruppa server esistenti) -->
+    <!-- Modal: create cluster -->
     <div class="modal-overlay hidden" id="modal-create-cluster">
       <div class="modal" style="max-width:500px">
         <div class="modal-title">
@@ -155,7 +221,24 @@
 <script>
 const session = requireAuth();
 let SERVERS = [];
-let editingServerId = null; // null = nuova aggiunta, numero = modifica
+let editingServerId = null;
+let currentAuthTab = 'token'; // 'token' | 'password' | 'both'
+
+// ── Auth tab logic ────────────────────────────────────────────────────────────
+
+function switchAuthTab(tab) {
+  currentAuthTab = tab;
+  ['token','password','both'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+  });
+  const showToken = tab === 'token' || tab === 'both';
+  const showPass  = tab === 'password' || tab === 'both';
+  document.getElementById('srv-token-section').classList.toggle('hidden', !showToken);
+  document.getElementById('srv-pass-section').classList.toggle('hidden', !showPass);
+  document.getElementById('srv-ssh-note').classList.toggle('hidden', tab !== 'both');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
 
 async function init() {
   await buildSidebar('servers');
@@ -173,7 +256,6 @@ async function init() {
   }
   pa.innerHTML = btns.join('');
 
-  // Fix 5: Enter nel modal add server
   document.getElementById('modal-add-server').addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveServer(); }
   });
@@ -181,17 +263,28 @@ async function init() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveCluster(); }
   });
 
-  // Toggle password visibilità nel modal server
+  // Toggle visibilità password
   document.getElementById('srv-eye').addEventListener('click', (e) => {
     e.preventDefault(); e.stopPropagation();
     const inp = document.getElementById('srv-pass');
     const icon = document.getElementById('srv-eye-icon');
-    if (inp.type === 'password') { inp.type = 'text'; icon.textContent = 'visibility_off'; }
-    else { inp.type = 'password'; icon.textContent = 'visibility'; }
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+    icon.textContent = inp.type === 'password' ? 'visibility' : 'visibility_off';
+  });
+
+  // Toggle visibilità token secret
+  document.getElementById('srv-token-eye').addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const inp = document.getElementById('srv-token-value');
+    const icon = document.getElementById('srv-token-eye-icon');
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+    icon.textContent = inp.type === 'password' ? 'visibility' : 'visibility_off';
   });
 
   await loadServers();
 }
+
+// ── Server list ───────────────────────────────────────────────────────────────
 
 async function loadServers() {
   try {
@@ -226,11 +319,23 @@ function renderServers() {
       <span class="material-symbols-rounded">delete</span>
     </button>` : '';
 
+    // Auth badge
+    const authLabels = { token: 'API Token', password: 'Password', both: 'Token + SSH Pass' };
+    const authBadge = `<span class="auth-badge ${s.auth_method}">
+      <span class="material-symbols-rounded" style="font-size:11px">${s.auth_method === 'password' ? 'lock' : 'key'}</span>
+      ${authLabels[s.auth_method] || s.auth_method}
+    </span>`;
+
+    // Mostra token ID se presente
+    const tokenInfo = s.token_name
+      ? `<span style="font-family:var(--mono);color:var(--text-muted)">!${escapeHtml(s.token_name)}</span>`
+      : '';
+
     return `<div class="server-card">
       <div class="server-icon"><span class="material-symbols-rounded">dns</span></div>
       <div class="server-info">
-        <div class="server-name">${escapeHtml(s.name)}</div>
-        <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)} · ${escapeHtml(s.host)}:${s.port}</div>
+        <div class="server-name">${escapeHtml(s.name)} ${authBadge}</div>
+        <div class="server-host">${escapeHtml(s.pve_username)}@${escapeHtml(s.pve_realm)}${tokenInfo} · ${escapeHtml(s.host)}:${s.port}</div>
         <div class="server-meta">SSL: ${s.verify_ssl ? 'verifica abilitata' : 'self-signed'} · Creato: ${s.created_at ? s.created_at.slice(0, 10) : '-'}</div>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
@@ -242,89 +347,104 @@ function renderServers() {
   el.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px">${cards}</div>`;
 }
 
-// Fix 2 + Fix 4: apri modal per nuovo server
+// ── Modal open/close ──────────────────────────────────────────────────────────
+
+function _resetModal(isEdit) {
+  document.getElementById('srv-name').value        = '';
+  document.getElementById('srv-host').value        = '';
+  document.getElementById('srv-port').value        = '8006';
+  document.getElementById('srv-user').value        = 'root';
+  document.getElementById('srv-realm').value       = 'pam';
+  document.getElementById('srv-pass').value        = '';
+  document.getElementById('srv-pass').type         = 'password';
+  document.getElementById('srv-eye-icon').textContent = 'visibility';
+  document.getElementById('srv-token-name').value  = '';
+  document.getElementById('srv-token-value').value = '';
+  document.getElementById('srv-token-value').type  = 'password';
+  document.getElementById('srv-token-eye-icon').textContent = 'visibility';
+  document.getElementById('srv-ssl').checked       = false;
+  document.getElementById('srv-pass-hint').style.display  = isEdit ? '' : 'none';
+  document.getElementById('srv-token-hint').textContent   = isEdit ? '(vuoto = non modificare)' : '';
+  switchAuthTab('token'); // default: token
+}
+
 function openAddServer() {
   editingServerId = null;
   document.getElementById('modal-server-title').innerHTML =
     '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">dns</span> Aggiungi server Proxmox';
-  document.getElementById('srv-name').value = '';
-  document.getElementById('srv-host').value = '';
-  document.getElementById('srv-port').value = '8006';
-  document.getElementById('srv-user').value = 'root';
-  document.getElementById('srv-realm').value = 'pam';
-  document.getElementById('srv-pass').value = '';
-  document.getElementById('srv-pass').type = 'password';
-  document.getElementById('srv-eye-icon').textContent = 'visibility';
-  document.getElementById('srv-ssl').checked = false;
-  document.getElementById('srv-pass-hint').style.display = 'none';
+  _resetModal(false);
   openModal('modal-add-server');
 }
 
-// Fix 4: apri modal per modifica server esistente
 function openEditServer(id) {
   const s = SERVERS.find(s => s.id === id);
   if (!s) return;
   editingServerId = id;
   document.getElementById('modal-server-title').innerHTML =
     '<span class="material-symbols-rounded" style="vertical-align:middle;margin-right:6px">edit</span> Modifica server Proxmox';
-  document.getElementById('srv-name').value = s.name || '';
-  document.getElementById('srv-host').value = s.host || '';
-  document.getElementById('srv-port').value = s.port || '8006';
-  document.getElementById('srv-user').value = s.pve_username || 'root';
-  document.getElementById('srv-realm').value = s.pve_realm || 'pam';
-  document.getElementById('srv-pass').value = '';
-  document.getElementById('srv-pass').type = 'password';
-  document.getElementById('srv-eye-icon').textContent = 'visibility';
+  _resetModal(true);
+  document.getElementById('srv-name').value  = s.name  || '';
+  document.getElementById('srv-host').value  = s.host  || '';
+  document.getElementById('srv-port').value  = s.port  || '8006';
+  document.getElementById('srv-user').value  = s.pve_username || 'root';
+  document.getElementById('srv-realm').value = s.pve_realm    || 'pam';
   document.getElementById('srv-ssl').checked = !!s.verify_ssl;
-  document.getElementById('srv-pass-hint').style.display = '';
+  // Pre-seleziona la tab in base al metodo salvato
+  if (s.token_name) document.getElementById('srv-token-name').value = s.token_name;
+  const tab = s.auth_method === 'both' ? 'both' : s.auth_method === 'token' ? 'token' : 'password';
+  switchAuthTab(tab);
   openModal('modal-add-server');
 }
 
-async function saveServer() {
-  const payload = {
-    name:         document.getElementById('srv-name').value.trim(),
-    host:         document.getElementById('srv-host').value.trim(),
-    port:         parseInt(document.getElementById('srv-port').value) || 8006,
-    pve_username: document.getElementById('srv-user').value.trim(),
-    pve_realm:    document.getElementById('srv-realm').value,
-    password:     document.getElementById('srv-pass').value,
-    verify_ssl:   document.getElementById('srv-ssl').checked,
-  };
+// ── Save ──────────────────────────────────────────────────────────────────────
 
-  if (editingServerId !== null) {
-    // Fix 4: aggiornamento — rimuovi password se vuota
-    if (!payload.password) delete payload.password;
-    if (!payload.name || !payload.host || !payload.pve_username) {
-      showToast('Compila tutti i campi obbligatori', 'warning'); return;
-    }
-    try {
+async function saveServer() {
+  const name       = document.getElementById('srv-name').value.trim();
+  const host       = document.getElementById('srv-host').value.trim();
+  const port       = parseInt(document.getElementById('srv-port').value) || 8006;
+  const pve_username = document.getElementById('srv-user').value.trim();
+  const pve_realm  = document.getElementById('srv-realm').value;
+  const verify_ssl = document.getElementById('srv-ssl').checked;
+  const password   = document.getElementById('srv-pass').value;
+  const token_name = document.getElementById('srv-token-name').value.trim();
+  const token_value= document.getElementById('srv-token-value').value;
+
+  if (!name || !host || !pve_username) {
+    showToast('Compila nome, host e utente', 'warning'); return;
+  }
+
+  // Validazione lato client: almeno un metodo di auth presente
+  const wantsToken = currentAuthTab === 'token' || currentAuthTab === 'both';
+  const wantsPass  = currentAuthTab === 'password' || currentAuthTab === 'both';
+  if (wantsToken && (!token_name || (!token_value && !editingServerId))) {
+    showToast('Inserisci Token ID e Token Secret', 'warning'); return;
+  }
+  if (wantsPass && (!password && !editingServerId)) {
+    showToast('Inserisci la password', 'warning'); return;
+  }
+
+  const payload = { name, host, port, pve_username, pve_realm, verify_ssl };
+  if (wantsPass  && password)    payload.password    = password;
+  if (wantsToken && token_name)  payload.token_name  = token_name;
+  if (wantsToken && token_value) payload.token_value = token_value;
+
+  try {
+    if (editingServerId !== null) {
       await credsApi.update(editingServerId, payload);
-      showToast(`Server "${payload.name}" aggiornato`, 'success');
-      closeModal('modal-add-server');
-      await loadServers();
-    } catch (e) {
-      showToast('Errore: ' + e.message, 'danger');
-    }
-  } else {
-    // Nuovo server
-    if (!payload.name || !payload.host || !payload.pve_username || !payload.password) {
-      showToast('Compila tutti i campi obbligatori', 'warning'); return;
-    }
-    try {
+      showToast(`Server "${name}" aggiornato`, 'success');
+    } else {
       const s = await credsApi.create(payload);
-      showToast(`Server "${payload.name}" aggiunto`, 'success');
-      closeModal('modal-add-server');
+      showToast(`Server "${name}" aggiunto`, 'success');
       if (!getActiveCred()) setActiveCred(s.id);
-      await loadServers();
-    } catch (e) {
-      const msg = e.message || '';
-      if (msg.includes('Credenziali non valide') || msg.includes('401')) {
-        showToast('Credenziali non valide: verifica utente e password', 'danger');
-      } else if (msg.includes('Impossibile raggiungere')) {
-        showToast(msg, 'danger');
-      } else {
-        showToast('Errore: ' + msg, 'danger');
-      }
+    }
+    closeModal('modal-add-server');
+    await loadServers();
+  } catch (e) {
+    const msg = e.message || '';
+    if (msg.includes('non valide') || msg.includes('401')) {
+      showToast('Credenziali non valide: verifica utente, password o token.', 'danger');
+    } else {
+      showToast('Errore: ' + msg, 'danger');
     }
   }
 }
@@ -354,7 +474,8 @@ async function removeServer(id, name) {
   });
 }
 
-// Fix 3: Creazione cluster
+// ── Cluster modal ─────────────────────────────────────────────────────────────
+
 function openCreateCluster() {
   if (!SERVERS.length) {
     showToast('Aggiungi almeno un server prima di creare un cluster', 'warning');
@@ -365,7 +486,6 @@ function openCreateCluster() {
   primarySel.innerHTML = SERVERS.map(s =>
     `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.host)})</option>`
   ).join('');
-
   const nodesList = document.getElementById('cl-nodes-list');
   nodesList.innerHTML = SERVERS.map(s => `
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;padding:6px 0">
@@ -374,7 +494,6 @@ function openCreateCluster() {
       <span>${escapeHtml(s.name)}</span>
       <span class="mono" style="color:var(--text-muted);font-size:11px">${escapeHtml(s.host)}</span>
     </label>`).join('');
-
   openModal('modal-create-cluster');
 }
 
@@ -382,11 +501,9 @@ async function saveCluster() {
   const name = document.getElementById('cl-name').value.trim();
   if (!name) { showToast('Inserisci il nome del cluster', 'warning'); return; }
   const primaryId = parseInt(document.getElementById('cl-primary').value);
-  const extraIds = Array.from(document.querySelectorAll('.cl-node-cb:checked')).map(cb => parseInt(cb.value));
+  const extraIds  = Array.from(document.querySelectorAll('.cl-node-cb:checked')).map(cb => parseInt(cb.value));
   const allNodeIds = [...new Set([primaryId, ...extraIds])];
-
   try {
-    // Chiama l'API di creazione cluster (il backend gestisce la configurazione Proxmox)
     await clusterApi.create({ name, primary_cred_id: primaryId, node_cred_ids: allNodeIds });
     showToast(`Cluster "${name}" creato`, 'success');
     closeModal('modal-create-cluster');

@@ -40,10 +40,14 @@ class ProxmoxCredential(Base):
     host = Column(String(255), nullable=False)
     port = Column(Integer, default=8006, nullable=False)
     pve_username = Column(String(128), nullable=False)
-    pve_realm = Column(String(32), default="pam", nullable=False)
-    encrypted_password = Column(LargeBinary, nullable=False)
-    verify_ssl = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    pve_realm    = Column(String(32),  default="pam", nullable=False)
+    # Auth — almeno uno dei due metodi deve essere valorizzato.
+    # encrypted_password è richiesta anche per operazioni SSH sul cluster (join/leave/create).
+    encrypted_password    = Column(LargeBinary, nullable=True)   # Fernet ciphertext
+    token_name            = Column(String(128),  nullable=True)   # API token ID (es. "mytoken")
+    encrypted_token_value = Column(LargeBinary,  nullable=True)   # Fernet ciphertext UUID token
+    verify_ssl   = Column(Boolean,  default=False, nullable=False)
+    created_at   = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     user = relationship("User", back_populates="credentials")
 

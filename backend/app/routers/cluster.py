@@ -491,6 +491,13 @@ def create_cluster(
             f"La creazione del cluster richiede le credenziali root@pam del nodo primario, "
             f"ma la credenziale salvata usa '{primary.pve_username}@{primary.pve_realm}'.",
         )
+    if not primary.encrypted_password:
+        raise HTTPException(
+            400,
+            f"La creazione del cluster richiede una password SSH sul nodo primario "
+            f"('{primary.name}'), ma la credenziale è configurata solo con API Token. "
+            "Modifica la credenziale aggiungendo anche la password (modalità 'Entrambi').",
+        )
 
     import paramiko
 
@@ -799,7 +806,8 @@ def _bg_ceph_setup(cred_id: int, user_id: int, is_primary: bool) -> None:
     try:
         from ..models import ProxmoxCredential
         cred = db.query(ProxmoxCredential).get(cred_id)
-        if not cred:
+        if not cred or not cred.encrypted_password:
+            _ceph_log.warning("bg_ceph_setup: no password for cred_id=%s, skipping SSH", cred_id)
             return
         password = decrypt_password(cred.encrypted_password)
         client   = paramiko.SSHClient()
@@ -995,6 +1003,20 @@ def cluster_join(
             f"ma la credenziale salvata usa '{joining.pve_username}@{joining.pve_realm}'. "
             f"Aggiorna le credenziali del server '{joining.name}' con utente 'root' e realm 'pam'.",
         )
+    if not master.encrypted_password:
+        raise HTTPException(
+            400,
+            f"Il join del cluster richiede una password SSH sul nodo master "
+            f"('{master.name}'), ma la credenziale è configurata solo con API Token. "
+            "Modifica la credenziale aggiungendo anche la password (modalità 'Entrambi').",
+        )
+    if not joining.encrypted_password:
+        raise HTTPException(
+            400,
+            f"Il join del cluster richiede una password SSH sul nodo entrante "
+            f"('{joining.name}'), ma la credenziale è configurata solo con API Token. "
+            "Modifica la credenziale aggiungendo anche la password (modalità 'Entrambi').",
+        )
 
     try:
         master_password = decrypt_password(master.encrypted_password)
@@ -1150,6 +1172,20 @@ def cluster_node_leave(
         raise HTTPException(400, "Il master richiede credenziali root@pam.")
     if leaving.pve_username != "root" or leaving.pve_realm != "pam":
         raise HTTPException(400, "Il nodo da rimuovere richiede credenziali root@pam.")
+    if not master.encrypted_password:
+        raise HTTPException(
+            400,
+            f"La rimozione di un nodo richiede una password SSH sul master "
+            f"('{master.name}'), ma la credenziale è configurata solo con API Token. "
+            "Modifica la credenziale aggiungendo anche la password (modalità 'Entrambi').",
+        )
+    if not leaving.encrypted_password:
+        raise HTTPException(
+            400,
+            f"La rimozione di un nodo richiede una password SSH sul nodo da rimuovere "
+            f"('{leaving.name}'), ma la credenziale è configurata solo con API Token. "
+            "Modifica la credenziale aggiungendo anche la password (modalità 'Entrambi').",
+        )
 
     try:
         master_password  = decrypt_password(master.encrypted_password)

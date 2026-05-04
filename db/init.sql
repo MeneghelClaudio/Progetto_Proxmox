@@ -15,16 +15,20 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS proxmox_credentials (
-    id                 INT AUTO_INCREMENT PRIMARY KEY,
-    user_id            INT           NOT NULL,
-    name               VARCHAR(128)  NOT NULL,          -- friendly label shown in the UI
-    host               VARCHAR(255)  NOT NULL,
-    port               INT           NOT NULL DEFAULT 8006,
-    pve_username       VARCHAR(128)  NOT NULL,          -- e.g. root
-    pve_realm          VARCHAR(32)   NOT NULL DEFAULT 'pam',
-    encrypted_password BLOB          NOT NULL,          -- Fernet ciphertext
-    verify_ssl         TINYINT(1)    NOT NULL DEFAULT 0,
-    created_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id                    INT AUTO_INCREMENT PRIMARY KEY,
+    user_id               INT           NOT NULL,
+    name                  VARCHAR(128)  NOT NULL,
+    host                  VARCHAR(255)  NOT NULL,
+    port                  INT           NOT NULL DEFAULT 8006,
+    pve_username          VARCHAR(128)  NOT NULL,
+    pve_realm             VARCHAR(32)   NOT NULL DEFAULT 'pam',
+    -- Auth: almeno uno tra (encrypted_password) e (token_name + encrypted_token_value) deve essere valorizzato.
+    -- encrypted_password è necessaria anche per le operazioni SSH sul cluster (join/leave/create).
+    encrypted_password    BLOB          NULL,             -- Fernet ciphertext della password PVE
+    token_name            VARCHAR(128)  NULL,             -- ID del token API (es. "mytoken")
+    encrypted_token_value BLOB          NULL,             -- Fernet ciphertext del secret UUID del token
+    verify_ssl            TINYINT(1)    NOT NULL DEFAULT 0,
+    created_at            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE KEY uniq_user_name (user_id, name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
