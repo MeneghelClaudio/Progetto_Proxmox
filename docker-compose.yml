@@ -1,28 +1,26 @@
 services:
   backend:
-    build: ./backend
+    image: 240595528763.dkr.ecr.eu-west-1.amazonaws.com/syam/progetto-proxmox-avengers:backend
     container_name: pmx_backend
     restart: unless-stopped
     environment:
       # ── AWS Secrets Manager ─────────────────────────────────────────────────
-      # DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD, JWT_SECRET, FERNET_KEY
-      # are loaded automatically from the secret at startup.
-      AWS_REGION:            ${AWS_REGION}
-      AWS_SECRET_NAME:       ${AWS_SECRET_NAME}
-      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION:            ${AWS_REGION:-}
+      AWS_SECRET_NAME:       ${AWS_SECRET_NAME:-}
+      AWS_ACCESS_KEY_ID:     ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
 
       # ── Non-sensitive config ────────────────────────────────────────────────
       CORS_ORIGINS: "*"
     volumes:
-      - backend_data:/data    # only needed if FERNET_KEY is NOT in Secrets Manager
+      - backend_data:/data
     networks:
       - pmx_net
     expose:
       - "8000"
 
   frontend:
-    build: ./frontend
+    image: 240595528763.dkr.ecr.eu-west-1.amazonaws.com/syam/progetto-proxmox-avengers:frontend
     container_name: pmx_frontend
     restart: unless-stopped
     depends_on:
