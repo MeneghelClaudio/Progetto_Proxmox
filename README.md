@@ -23,7 +23,7 @@ Web app per la gestione centralizzata di cluster Proxmox VE, stile VMware Workst
 ## Quick Start (Docker)
 
 ```bash
-git clone <repo> proxmox-manager
+git clone https://github.com/MeneghelClaudio/Progetto_Proxmox.git proxmox-manager
 cd proxmox-manager
 cp .env.example .env
 # Modifica .env: AWS_REGION, AWS_SECRET_NAME, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
